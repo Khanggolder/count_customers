@@ -1,0 +1,17 @@
+{
+  "name": "osnet_x0_25_msmt17",
+  "file_id": "1Kkx2zW89jq_NETu4u42CFZTMVD5Hwm6e",
+  "model_zoo": "https://kaiyangzhou.github.io/deep-person-reid/MODEL_ZOO",
+  "training": "MSMT17 combineall, person Re-ID",
+  "file": "models/osnet_x0_25_msmt17.pt",
+  "bytes": 9336983,
+  "sha256": "cf55163d78fc44c62c82f85ab62d39f10438679b5abe8c698ae08cfa84aa6e18",
+  "validated": true,
+  "state_tensor_count": 568,
+  "key_sample": [
+    "classifier.bias",
+    "classifier.weight",
+    "conv1.bn.bias",
+    "conv1.bn.num_batches_tracked"
+  ]
+}

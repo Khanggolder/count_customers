@@ -1,0 +1,31 @@
+database_url: sqlite:///data/busreid.db
+detector:
+  model: yolo11n.pt
+  confidence: 0.35
+  iou: 0.50
+  device: auto
+  tracker: bytetrack.yaml
+reid:
+  model: osnet_x0_25
+  checkpoint: models/osnet_x0_25_msmt17.pt
+  threshold: 0.72
+  ambiguity_margin: 0.05
+  max_candidates: 100
+cameras:
+  front:
+    role: front
+    event_direction: IN
+    source: null
+    zone_a: [[0.56, 0.05], [0.98, 0.05], [0.98, 0.98], [0.56, 0.98]]
+    zone_b: [[0.20, 0.05], [0.54, 0.05], [0.54, 0.98], [0.20, 0.98]]
+    min_stable_frames: 2
+    debounce_frames: 12
+  rear:
+    role: rear
+    event_direction: OUT
+    source: null
+    zone_a: [[0.05, 0.05], [0.95, 0.05], [0.95, 0.48], [0.05, 0.48]]
+    zone_b: [[0.05, 0.52], [0.95, 0.52], [0.95, 0.95], [0.05, 0.95]]
+    min_stable_frames: 2
+    debounce_frames: 12
+
