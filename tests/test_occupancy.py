@@ -11,4 +11,3 @@ def test_unpaired_is_na() -> None:
     result = OccupancyEstimator(initial=10, paired_sources=False).estimate(3, 1)
     assert result.value is None
     assert "UNPAIRED" in result.warning
-

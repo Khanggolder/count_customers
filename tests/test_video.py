@@ -30,7 +30,6 @@ def test_video_source_and_metadata(tmp_path: Path) -> None:
 
 
 def test_rtsp_credentials_are_redacted() -> None:
-    result = redact_source("rtsp://admin:secret@10.0.0.2:554/live")
-    assert "admin" not in result and "secret" not in result
+    result = redact_source("rtsp://admin:secret@10.0.0.2:554/live?token=topsecret")
+    assert "admin" not in result and "secret" not in result and "token" not in result
     assert "10.0.0.2" in result
-

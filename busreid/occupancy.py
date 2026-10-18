@@ -22,4 +22,3 @@ class OccupancyEstimator:
         if value < 0:
             warning = "Occupancy âm: kiểm tra đồng bộ nguồn, số khách ban đầu hoặc sự kiện bỏ sót"
         return OccupancySnapshot(value, warning)
-

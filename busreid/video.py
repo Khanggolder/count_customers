@@ -30,7 +30,8 @@ def redact_source(source: str | int) -> str:
     host = parts.hostname or ""
     if parts.port:
         host = f"{host}:{parts.port}"
-    return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
+    # RTSP query strings commonly contain access tokens; never persist them.
+    return urlunsplit((parts.scheme, host, parts.path, "", ""))
 
 
 class VideoSource(ABC):
@@ -125,4 +126,3 @@ def probe_video(path: str | Path) -> VideoMetadata:
         return source.open()
     finally:
         source.close()
-

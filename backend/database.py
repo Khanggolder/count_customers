@@ -12,12 +12,14 @@ class Base(DeclarativeBase):
     pass
 
 
-DATABASE_URL = os.getenv("BUSREID_DATABASE_URL", "sqlite:///data/busreid.db")
+DATABASE_URL = os.getenv("BUSSTOP_DATABASE_URL", "sqlite:///data/busstop_flow.db")
 if DATABASE_URL.startswith("sqlite:///"):
     db_path = Path(DATABASE_URL.removeprefix("sqlite:///"))
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
+engine = create_engine(
+    DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
@@ -27,4 +29,3 @@ def get_db() -> Generator[Session, None, None]:
         yield database
     finally:
         database.close()
-

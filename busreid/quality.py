@@ -42,4 +42,3 @@ class QualitySelector:
 
     def pop(self, track_id: str) -> list[TrackCrop]:
         return self._crops.pop(track_id, [])
-

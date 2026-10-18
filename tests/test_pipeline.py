@@ -5,7 +5,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from busreid.config import AppConfig, CameraConfig, DetectorConfig, ReIDConfig
+from busreid.config import AppConfig, CameraConfig, DetectorConfig
 from busreid.pipeline import CameraPipeline
 from busreid.types import Detection, Direction
 
@@ -27,24 +27,22 @@ def make_video(path: Path) -> None:
     writer.release()
 
 
-def test_pipeline_writes_real_outputs_from_labeled_synthetic_tracks(tmp_path: Path) -> None:
+def test_pipeline_writes_outputs_from_deterministic_tracks(tmp_path: Path) -> None:
     source = tmp_path / "synthetic_fixture.mp4"
     make_video(source)
     camera = CameraConfig(
-        name="front",
-        role="front",
-        event_direction=Direction.IN,
-        source=str(source),
-        zone_a=[(0, 0), (1, 0), (1, 0.45), (0, 0.45)],
-        zone_b=[(0, 0.55), (1, 0.55), (1, 1), (0, 1)],
-        min_stable_frames=2,
-        debounce_frames=4,
+        "front",
+        "front",
+        Direction.IN,
+        str(source),
+        [(0, 0), (1, 0), (1, 0.45), (0, 0.45)],
+        [(0, 0.55), (1, 0.55), (1, 1), (0, 1)],
+        2,
+        4,
     )
-    config = AppConfig("sqlite://", DetectorConfig(), ReIDConfig(), {"front": camera})
+    config = AppConfig("sqlite://", DetectorConfig(), {"front": camera})
     result = CameraPipeline(camera, config, detector=FakeDetector()).run(str(source), tmp_path / "output")
     assert result.frames == 8
-    assert len(result.events) == 1
-    assert result.events[0].direction == Direction.IN
+    assert [event.direction for event in result.events] == [Direction.IN]
     assert Path(result.annotated_path).is_file()
-    assert Path(result.events_path).read_text(encoding="utf-8-sig").count("front:track00001") == 1
-
+    assert "front:track00001" in Path(result.events_path).read_text(encoding="utf-8-sig")

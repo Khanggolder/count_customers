@@ -13,7 +13,11 @@ def det(track: str, y: int) -> Detection:
 
 
 def feed(counter: DirectionCounter, track: str, ys: list[int]) -> list:
-    return [event for index, y in enumerate(ys) if (event := counter.update(det(track, y), SHAPE, index, index / 10))]
+    return [
+        event
+        for index, y in enumerate(ys)
+        if (event := counter.update(det(track, y), SHAPE, index, index / 10))
+    ]
 
 
 def test_outside_to_inside_counted_once() -> None:
@@ -65,3 +69,17 @@ def test_lost_track_does_not_create_false_crossing() -> None:
     counter.prune(set())
     assert counter.update(det("front:new", 80), SHAPE, 10, 1) is None
 
+
+def test_state_ttl_cleanup_is_bounded() -> None:
+    counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 1, 1, state_ttl_frames=3)
+    counter.update(det("front:old", 20), SHAPE, 1, 0.1)
+    counter.prune_stale(5)
+    assert counter.states == {}
+
+
+def test_unique_nearby_id_switch_keeps_crossing_state() -> None:
+    counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 1, 1, id_switch_max_distance=0.7)
+    assert counter.update(det("front:old", 20), SHAPE, 0, 0.0) is None
+    event = counter.update(det("front:new", 80), SHAPE, 1, 0.1)
+    assert event is not None
+    assert event.direction == Direction.IN

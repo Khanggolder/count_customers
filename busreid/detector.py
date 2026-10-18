@@ -55,4 +55,3 @@ class PersonDetector:
             )
             for box, track_id, confidence in zip(xyxy, ids, confs, strict=True)
         ]
-

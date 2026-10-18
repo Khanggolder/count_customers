@@ -16,7 +16,7 @@ from .counting import DirectionCounter
 from .detector import PersonDetector
 from .quality import QualitySelector
 from .types import CrossingEvent, Detection
-from .video import OpenCVVideoSource, VideoMetadata
+from .video import OpenCVVideoSource, VideoMetadata, redact_source
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,17 @@ def annotate_frame(
 
 
 def _write_events(path: Path, events: list[CrossingEvent]) -> None:
-    fields = ["camera", "track_id", "direction", "frame_index", "timestamp_s", "confidence", "crop_path", "synthetic", "created_at"]
+    fields = [
+        "camera",
+        "track_id",
+        "direction",
+        "frame_index",
+        "timestamp_s",
+        "confidence",
+        "crop_path",
+        "synthetic",
+        "created_at",
+    ]
     with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -90,7 +100,9 @@ def _write_events(path: Path, events: list[CrossingEvent]) -> None:
 
 
 class CameraPipeline:
-    def __init__(self, camera: CameraConfig, config: AppConfig, detector: PersonDetector | None = None) -> None:
+    def __init__(
+        self, camera: CameraConfig, config: AppConfig, detector: PersonDetector | None = None
+    ) -> None:
         self.camera = camera
         self.detector = detector or PersonDetector(camera.name, **asdict(config.detector))
         self.counter = DirectionCounter(
@@ -100,6 +112,8 @@ class CameraPipeline:
             forward_direction=camera.event_direction,
             min_stable_frames=camera.min_stable_frames,
             debounce_frames=camera.debounce_frames,
+            state_ttl_frames=camera.state_ttl_frames,
+            anchor_mode=camera.anchor_mode,
         )
         self.quality = QualitySelector()
 
@@ -153,13 +167,17 @@ class CameraPipeline:
                         if crops:
                             crop_dir = destination / "crops"
                             crop_dir.mkdir(exist_ok=True)
-                            crop_path = crop_dir / f"{self.camera.name}_{detection.track_id.replace(':', '_')}_{frame_index}.jpg"
+                            crop_path = (
+                                crop_dir
+                                / f"{self.camera.name}_{detection.track_id.replace(':', '_')}_{frame_index}.jpg"
+                            )
                             cv2.imwrite(str(crop_path), crops[0])
                             event.crop_path = str(crop_path)
                         counts[event.direction.value] += 1
                         events.append(event)
                         if on_event:
                             on_event(event, crops)
+                self.counter.prune_stale(frame_index)
                 writer.write(annotate_frame(frame, detections, self.camera, counts))
                 frame_index += 1
         finally:
@@ -176,7 +194,7 @@ class CameraPipeline:
         _write_events(events_file, events)
         result = PipelineResult(
             camera=self.camera.name,
-            input_path=source_path,
+            input_path=redact_source(source_path),
             annotated_path=str(annotated),
             events_path=str(events_file),
             events=events,
@@ -210,4 +228,3 @@ class CameraPipeline:
             encoding="utf-8",
         )
         return result
-

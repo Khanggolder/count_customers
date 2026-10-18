@@ -16,7 +16,12 @@ def load_counts(path: Path) -> dict[tuple[str, str], int]:
                 key = (clip, row["direction"].upper())
                 counts[key] = counts.get(key, 0) + 1
             else:
-                for field, direction in (("entering_gt", "IN"), ("exiting_gt", "OUT"), ("in", "IN"), ("out", "OUT")):
+                for field, direction in (
+                    ("entering_gt", "IN"),
+                    ("exiting_gt", "OUT"),
+                    ("in", "IN"),
+                    ("out", "OUT"),
+                ):
                     if row.get(field) not in (None, ""):
                         counts[(clip, direction)] = int(row[field])
     return counts
@@ -34,8 +39,22 @@ def main() -> int:
     common = sorted(set(predicted) & set(ground_truth))
     if not common:
         raise ValueError("Không có clip/direction chung giữa prediction và ground truth")
-    rows = [{"clip": key[0], "direction": key[1], "predicted": predicted[key], "ground_truth": ground_truth[key], "absolute_error": abs(predicted[key] - ground_truth[key])} for key in common]
-    report = {"count_pairs": len(rows), "mae": sum(row["absolute_error"] for row in rows) / len(rows), "rows": rows, "reid_metrics": None, "reid_note": "NA nếu không có identity ground truth"}
+    rows = [
+        {
+            "clip": key[0],
+            "direction": key[1],
+            "predicted": predicted[key],
+            "ground_truth": ground_truth[key],
+            "absolute_error": abs(predicted[key] - ground_truth[key]),
+        }
+        for key in common
+    ]
+    report = {
+        "count_pairs": len(rows),
+        "mae": sum(row["absolute_error"] for row in rows) / len(rows),
+        "rows": rows,
+        "model_validation": "COUNT_ONLY",
+    }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(report, indent=2, ensure_ascii=False))
@@ -44,4 +63,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
