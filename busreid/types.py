@@ -50,6 +50,7 @@ class CrossingEvent:
     crop_path: str | None = None
     synthetic: bool = False
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    capture_time_utc: datetime | None = None
 
 
 @dataclass(slots=True)

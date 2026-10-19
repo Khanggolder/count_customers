@@ -53,6 +53,22 @@ def test_stale_or_missing_gps_does_not_confirm() -> None:
     assert StopVisitDetector([STOP]).detect(rows) == []
 
 
+def test_missing_gps_during_open_door_does_not_depart() -> None:
+    rows = [sample(i, 10.0, 0.0, True) for i in range(4)]
+    rows += [sample(i, None, 0.0, True, "MISSING") for i in range(4, 8)]
+    rows += [sample(8, 10.0, 0.0, True), sample(9, 10.001, 15.0, False)]
+    visits = StopVisitDetector([STOP]).detect(rows)
+    assert len(visits) == 1
+    assert visits[0].departed_at == START + timedelta(seconds=9)
+
+
+def test_stale_far_gps_during_open_door_does_not_depart() -> None:
+    rows = [sample(i, 10.0, 0.0, True) for i in range(4)]
+    rows += [sample(4, 10.01, 15.0, True, "STALE")]
+    visits = StopVisitDetector([STOP]).detect(rows)
+    assert visits[0].departed_at is None
+
+
 def test_stop_sequence_and_repeated_stop_are_bounded() -> None:
     stop2 = StopPoint("S2", 2, 10.002, 106.0, 50)
     rows = [sample(i, 10.0, 0.0, True) for i in range(4)]

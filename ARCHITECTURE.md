@@ -18,7 +18,7 @@ Video file dùng PTS/fps và chỉ có absolute capture time khi người vận 
 
 `MOVING → APPROACHING → DWELL_CANDIDATE → STOP_CONFIRMED → DEPARTING → CLOSED` được hiện thực dưới dạng state batch theo thứ tự trạm. Xác nhận cần đồng thời geofence, tốc độ thấp, dwell và cửa mở. Thiếu door signal chỉ tạo `UNCERTAIN`; cửa đóng không tạo serving stop. GPS stale/missing bị loại.
 
-Event chỉ auto-assign vào `CONFIRMED` StopVisit trong cửa sổ thời gian có grace. Event khác giữ `UNASSIGNED`; chỉnh tay tạo `ReviewAudit`.
+Event thật chỉ auto-assign khi source cùng trip/cửa/provenance, clock capture có neo và được xác nhận đồng bộ, StopVisit `CONFIRMED` trong cửa sổ thời gian, và mẫu cửa tương ứng mở trong 2 giây trước event. Thiếu bằng chứng cửa thành `REVIEW_REQUIRED`; thiếu đồng bộ/trạm vẫn `UNASSIGNED`. Chỉnh tay tạo `ReviewAudit`.
 
 ## Dữ liệu
 

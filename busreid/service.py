@@ -30,6 +30,140 @@ def parse_time(value: str | datetime) -> datetime:
     return result.astimezone(timezone.utc)
 
 
+def validate_event_source(
+    db: Session, trip_id: str, source_id: str, camera: str, provenance: str, source_type: str
+) -> CameraSourceModel:
+    trip = db.get(TripModel, trip_id)
+    source = db.get(CameraSourceModel, source_id)
+    if trip is None or source is None or source.trip_id != trip_id or source.door_role != camera:
+        raise ValueError("source_id must belong to trip_id and camera")
+    synthetic = trip.provenance == "SIMULATED"
+    if synthetic != (provenance == "SIMULATED_EVENTS"):
+        raise ValueError("Synthetic and real AI provenance cannot be mixed")
+    if synthetic != (source.input_type == "SIMULATION"):
+        raise ValueError("Camera source input_type conflicts with trip provenance")
+    if synthetic != (source_type == "SIMULATED_EVENT_GENERATOR"):
+        raise ValueError("Event source_type conflicts with trip provenance")
+    return source
+
+
+def detect_and_assign(db: Session, trip_id: str) -> dict:
+    trip = db.get(TripModel, trip_id)
+    if trip is None:
+        raise KeyError(trip_id)
+    stops = list(
+        db.scalars(select(StopModel).where(StopModel.route_id == trip.route_id).order_by(StopModel.sequence))
+    )
+    telemetry = list(
+        db.scalars(
+            select(TelemetrySampleModel)
+            .where(TelemetrySampleModel.trip_id == trip_id)
+            .order_by(TelemetrySampleModel.event_time_utc)
+        )
+    )
+    if trip.provenance == "SIMULATED" and any(row.source != "SIMULATED" for row in telemetry):
+        raise ValueError("Synthetic trip contains non-synthetic telemetry")
+    if trip.provenance != "SIMULATED" and any(row.source == "SIMULATED" for row in telemetry):
+        raise ValueError("Real trip cannot use synthetic telemetry")
+    points = [
+        TelemetryPoint(
+            parse_time(
+                row.event_time_utc.replace(tzinfo=timezone.utc)
+                if row.event_time_utc.tzinfo is None
+                else row.event_time_utc
+            ),
+            row.latitude,
+            row.longitude,
+            row.speed_kmh,
+            row.door_front,
+            row.door_rear,
+            row.quality,
+        )
+        for row in telemetry
+    ]
+    detected = StopVisitDetector(
+        [StopPoint(row.stop_id, row.sequence, row.latitude, row.longitude, row.radius_m) for row in stops]
+    ).detect(points)
+    visit_ids: dict[str, str] = {}
+    created = updated = 0
+    for visit in detected:
+        visit_id = f"{trip_id}:{visit.stop_id}:{int(visit.arrived_at.timestamp())}"
+        visit_ids[visit.stop_id] = visit_id
+        existing_visit = db.get(StopVisitModel, visit_id)
+        if existing_visit is None:
+            db.add(
+                StopVisitModel(
+                    stop_visit_id=visit_id,
+                    trip_id=trip_id,
+                    stop_id=visit.stop_id,
+                    arrived_at=visit.arrived_at,
+                    departed_at=visit.departed_at,
+                    status=visit.status,
+                    evidence=visit.evidence,
+                    confidence=visit.confidence,
+                    override_audit=[],
+                )
+            )
+            created += 1
+        elif not existing_visit.override_audit:
+            existing_visit.departed_at = visit.departed_at
+            existing_visit.status = visit.status
+            existing_visit.evidence = visit.evidence
+            existing_visit.confidence = visit.confidence
+            updated += 1
+    assigned = review = 0
+    events = list(
+        db.scalars(
+            select(PassengerEventModel).where(
+                PassengerEventModel.trip_id == trip_id,
+                PassengerEventModel.assignment_status.in_(["UNASSIGNED", "REVIEW_REQUIRED"]),
+            )
+        )
+    )
+    for event in events:
+        source = validate_event_source(
+            db, trip_id, event.source_id, event.camera, event.provenance, event.source_type
+        )
+        if trip.provenance != "SIMULATED" and (
+            source.paired_flag not in {"SYNCHRONIZED", "PAIRED_VERIFIED"}
+            or event.source_type != "REAL_VIDEO_AI"
+        ):
+            continue
+        event_time = parse_time(
+            event.event_time_utc.replace(tzinfo=timezone.utc)
+            if event.event_time_utc.tzinfo is None
+            else event.event_time_utc
+        )
+        stop_id = assign_visit(event_time, detected)
+        if not stop_id:
+            continue
+        # Use a recent preceding sensor sample; future readings cannot prove an open door.
+        evidence = [
+            point for point in points if 0 <= (event_time - point.event_time_utc).total_seconds() <= 2
+        ]
+        door = (
+            (evidence[-1].door_front if event.camera == "FRONT" else evidence[-1].door_rear)
+            if evidence
+            else None
+        )
+        if door is True:
+            event.stop_visit_id = visit_ids[stop_id]
+            event.assignment_status = "AUTO_ASSIGNED"
+            assigned += 1
+        else:
+            event.stop_visit_id = None
+            event.assignment_status = "REVIEW_REQUIRED"
+            review += 1
+    db.commit()
+    return {
+        "detected": len(detected),
+        "created": created,
+        "updated": updated,
+        "events_assigned": assigned,
+        "events_review_required": review,
+    }
+
+
 def replay_scenario(db: Session, scenario: dict) -> dict:
     route_data, trip_data = scenario["route"], scenario["trip"]
     route = db.get(RouteModel, route_data["route_id"])
@@ -50,6 +184,8 @@ def replay_scenario(db: Session, scenario: dict) -> dict:
             },
         )
         db.add(trip)
+    elif trip.provenance != "SIMULATED":
+        raise ValueError("Scenario cannot be replayed into a real trip")
     for camera in ("front", "rear"):
         source_id = f"{trip_data['trip_id']}:{camera}:sim"
         if db.get(CameraSourceModel, source_id) is None:
@@ -181,6 +317,8 @@ def flow_rows(db: Session, trip_id: str) -> list[dict]:
     visits = list(db.scalars(select(StopVisitModel).where(StopVisitModel.trip_id == trip_id)))
     visit_by_stop = {visit.stop_id: visit for visit in visits}
     events = list(db.scalars(select(PassengerEventModel).where(PassengerEventModel.trip_id == trip_id)))
+    for event in events:
+        validate_event_source(db, trip_id, event.source_id, event.camera, event.provenance, event.source_type)
     occupancy_valid = trip.mode in {"PAIRED_VERIFIED", "SYNTHETIC_PAIRED"} and trip.coverage_complete
     occupancy = trip.initial_occupancy
     rows = []
@@ -226,6 +364,9 @@ def update_assignment(
     event = db.get(PassengerEventModel, event_id)
     if event is None:
         raise KeyError(event_id)
+    validate_event_source(
+        db, event.trip_id, event.source_id, event.camera, event.provenance, event.source_type
+    )
     if stop_visit_id is not None:
         visit = db.get(StopVisitModel, stop_visit_id)
         if visit is None or visit.trip_id != event.trip_id:

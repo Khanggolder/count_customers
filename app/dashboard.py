@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -114,6 +117,99 @@ with cameras_tab:
     st.caption(
         "Video public không đồng bộ telemetry được xử lý riêng và event giữ UNASSIGNED cho tới khi có bằng chứng trạm."
     )
+    st.markdown("#### Run inference on an existing real trip")
+    if selected_trip:
+        selected_record = next(item for item in trips if item["trip_id"] == selected_trip)
+        if selected_record["provenance"] == "SIMULATED":
+            st.warning("Synthetic trip cannot receive real AI video events.")
+        else:
+            front_source = st.text_input("FRONT MP4/RTSP source", key="inference_front", type="password")
+            rear_source = st.text_input("REAR MP4/RTSP source", key="inference_rear", type="password")
+            telemetry_file = st.text_input("Synchronized telemetry JSON path", key="inference_telemetry")
+            capture_start = st.text_input("Capture start ISO-8601 with timezone", key="inference_start")
+            sync_confirmed = st.checkbox(
+                "I verified video and telemetry belong to this physical trip and share a clock"
+            )
+            max_frames = st.number_input("Max frames per camera (0 = entire source)", min_value=0, value=0)
+            if st.button("Start AI inference", disabled=not (front_source or rear_source)):
+                if sync_confirmed and (not telemetry_file or not capture_start):
+                    st.error("Synchronization requires telemetry JSON and capture start time.")
+                else:
+                    output = (
+                        ROOT
+                        / "runs"
+                        / "dashboard"
+                        / f"{selected_trip}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+                    )
+                    output.mkdir(parents=True, exist_ok=True)
+                    command = [
+                        sys.executable,
+                        str(ROOT / "scripts" / "run_count.py"),
+                        "--trip-id",
+                        selected_trip,
+                        "--config",
+                        str(CONFIG_PATH),
+                        "--output",
+                        str(output),
+                    ]
+                    for flag, value in (
+                        ("--front", front_source),
+                        ("--rear", rear_source),
+                        ("--telemetry-json", telemetry_file),
+                        ("--recording-start-time", capture_start),
+                    ):
+                        if value:
+                            command.extend([flag, value])
+                    if sync_confirmed:
+                        command.append("--telemetry-synchronized")
+                    if max_frames:
+                        command.extend(["--max-frames", str(max_frames)])
+                    log = (output / "process.log").open("w", encoding="utf-8")
+                    process = subprocess.Popen(
+                        command,
+                        cwd=ROOT,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                    log.close()
+                    st.session_state["inference_process"] = process
+                    st.session_state["inference_output"] = str(output)
+                    st.rerun()
+            process = st.session_state.get("inference_process")
+            output_value = st.session_state.get("inference_output")
+            if process and output_value:
+                output = Path(output_value)
+                if process.poll() is None:
+                    st.info("Inference running. Refresh to update progress.")
+                    st.button("Refresh progress")
+                else:
+                    st.success("Inference completed") if process.returncode == 0 else st.error(
+                        f"Inference failed (exit {process.returncode}). See process.log locally."
+                    )
+                for camera in ("front", "rear"):
+                    progress_file = output / f"{camera}_progress.json"
+                    if progress_file.is_file():
+                        progress = json.loads(progress_file.read_text(encoding="utf-8"))
+                        total = progress.get("total_frames")
+                        st.write(
+                            f"{camera.upper()}: {progress['frames']} frames, {progress['events']} events, {progress['status']}"
+                        )
+                        if total:
+                            st.progress(min(progress["frames"] / total, 1.0))
+                    annotated = output / f"{camera}_annotated.mp4"
+                    if process.poll() is not None and annotated.is_file():
+                        st.video(str(annotated))
+                summary_file = output / "run_summary.json"
+                if summary_file.is_file():
+                    summary = json.loads(summary_file.read_text(encoding="utf-8"))
+                    st.json(
+                        {
+                            "aggregation": summary["aggregation"],
+                            "workers": summary["workers"],
+                            "video_model_validation": summary["video_model_validation"],
+                        }
+                    )
 
 with stops_tab:
     if selected_trip:
@@ -140,7 +236,7 @@ with stops_tab:
 with events_tab:
     if selected_trip:
         events = api("GET", f"/trips/{selected_trip}/passenger-events?limit=5000") or []
-        statuses = ["ALL", "AUTO_ASSIGNED", "MANUAL_ASSIGNED", "UNASSIGNED"]
+        statuses = ["ALL", "AUTO_ASSIGNED", "MANUAL_ASSIGNED", "REVIEW_REQUIRED", "UNASSIGNED"]
         selected_status = st.selectbox("Trạng thái gán trạm", statuses)
         shown = (
             events
@@ -152,7 +248,9 @@ with events_tab:
             "Accuracy video: N/A nếu không có ground truth đúng clip. Scenario synthetic chỉ kiểm thử logic, không phải AI accuracy."
         )
         if events:
-            unassigned = [item for item in events if item["assignment_status"] == "UNASSIGNED"]
+            unassigned = [
+                item for item in events if item["assignment_status"] in {"UNASSIGNED", "REVIEW_REQUIRED"}
+            ]
             if unassigned:
                 st.markdown("#### Review event chưa gán")
                 event_id = st.selectbox("Event", [item["id"] for item in unassigned])
@@ -190,6 +288,11 @@ with demo_tab:
         result = api("POST", "/demo/generate")
         if result:
             st.success(f"Hoàn tất: {json.dumps(result, ensure_ascii=False)}")
+            st.rerun()
+    if st.button("Tạo kịch bản đối chứng occupancy âm"):
+        result = api("POST", "/demo/generate?kind=negative_occupancy")
+        if result:
+            st.warning(f"Đã tạo kịch bản đối chứng: {result['trip_id']}")
             st.rerun()
     st.markdown(
         "Các ca đối chứng: dừng đèn đỏ gần trạm nhưng cửa đóng; tốc độ 0 ngoài geofence; cửa mở ngoài trạm; GPS mất; event ngoài StopVisit; FRONT có OUT và REAR có IN."

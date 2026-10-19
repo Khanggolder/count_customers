@@ -95,6 +95,33 @@ Sửa `configs/cameras.yaml` cho từng góc quay:
 
 Ngưỡng stop mặc định trong `StopVisitDetector` (`speed<=3 km/h`, radius theo stop, dwell 3 giây) là giá trị nghiên cứu, không phải tiêu chuẩn khai thác.
 
+## End-to-end trên trip hiện có
+
+Tạo trip thật qua `POST /trips` với một route/stop đã có; không dùng trip `SIMULATED`. Cung cấp hai MP4/RTSP của **cùng xe/chuyến**, thời điểm bắt đầu capture có timezone và telemetry JSON gồm các mẫu `event_time_utc`, `latitude`, `longitude`, `speed_kmh`, `door_front`, `door_rear`, `source` (`SENSOR`/`CSV`/`JSON`, không phải `SIMULATED`). Đồng hồ video/telemetry phải được kiểm chứng độc lập. Ví dụ:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_count.py `
+  --trip-id TRIP-REAL-001 --front D:\video\front.mp4 --rear D:\video\rear.mp4 `
+  --recording-start-time 2026-10-20T08:00:00+07:00 `
+  --telemetry-json D:\telemetry\trip-001.json --telemetry-synchronized `
+  --output runs\trip-001
+```
+
+Lệnh dùng trip hiện có, tạo/kiểm tra `CameraSource`, chạy hai pipeline, nhập telemetry idempotent, phát hiện StopVisit, gán event và ghi `run_summary.json` + video annotated. `--telemetry-synchronized` là lời xác nhận của người vận hành, **không** phải thuật toán tự chứng minh đồng bộ. Event chỉ `AUTO_ASSIGNED` khi nguồn thuộc đúng trip/cửa, capture clock có neo thời gian, StopVisit confirmed và mẫu cửa tương ứng đang mở trong 2 giây trước event. Thiếu bằng chứng cửa thành `REVIEW_REQUIRED`; thiếu GPS/telemetry cùng nguồn hoặc không xác nhận đồng bộ thì `UNASSIGNED`. Public Pexels không có GPS cùng nguồn nên vẫn `UNASSIGNED`. Không dùng `--paired-verified` để ngụ ý coverage đầy đủ nếu chưa kiểm chứng; occupancy thật vẫn `N/A` khi `coverage_complete=false`.
+
+Dashboard tab **Hai cửa** cho chọn trip thật, FRONT/REAR, telemetry, capture start, xem progress theo frame và video annotated sau khi xong. Đây là subprocess cục bộ Windows; không dùng làm dịch vụ inference nhiều người dùng. Các endpoint `/runs` hiện chỉ lưu metadata, chưa phải job queue chạy inference. `runs/` và video không được commit.
+
+Demo chính: `POST /demo/generate` có 8 trạm, 57 event synthetic, occupancy ban đầu 8 và không âm. Đối chứng lỗi riêng: `POST /demo/generate?kind=negative_occupancy`, occupancy ban đầu 0 và có cảnh báo âm. Cả hai đều không phải AI output.
+
+Gán nhãn thủ công và đánh giá:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\label_video.py --video D:\video\front.mp4 --output runs\front_gt.csv
+.\.venv\Scripts\python.exe scripts\evaluate.py --pred runs\trip-001\front_events.csv --gt runs\front_gt.csv --output runs\front_eval.json
+```
+
+Trong cửa sổ nhãn: `I` = IN, `O` = OUT, `Space` = tạm dừng, `Q` = lưu. Với event timestamps, evaluator ghép 1-1 trong tolerance 1 giây để tính precision/recall, đồng thời tính MAE đếm theo clip/chiều. Không có nhãn thì tất cả metric là `N/A` (`null` trong JSON). Các test dùng `FakeDetector` chỉ chứng minh phần mềm nối đúng, không đo AI accuracy.
+
 ## Test
 
 ```powershell

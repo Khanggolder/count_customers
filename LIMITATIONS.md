@@ -10,5 +10,5 @@
 - Timestamp video không có capture metadata được ghi rõ `PROCESSING_TIME_NOT_CAPTURE_TIME`; không được diễn giải thành giờ quay.
 - Dashboard/API chưa có authentication, TLS, RBAC hoặc retention policy. Chỉ bind localhost cho MVP; không public Internet.
 - SQLite và crop local phù hợp demo, chưa phù hợp fleet nhiều xe. Cần PostgreSQL/object storage/message broker khi production.
-- Occupancy âm trong scenario cuối chuyến là ca kiểm thử cảnh báo; hệ thống cố ý không clamp để tránh che lỗi initial occupancy/missing event.
+- Demo chính có occupancy hợp lệ; scenario đối chứng `negative_occupancy` riêng mới tạo cảnh báo âm. Hệ thống cố ý không clamp để tránh che lỗi initial occupancy/missing event.
 - Không có Person Re-ID, nhận diện khuôn mặt/danh tính, OD cá nhân, dự báo hoặc tối ưu lịch xe.

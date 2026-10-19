@@ -31,8 +31,10 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def build_scenario(seed: int = 42) -> dict:
+def build_scenario(seed: int = 42, kind: str = "normal") -> dict:
     """Build a deterministic, fully labelled scenario; seed is recorded for reproducibility."""
+    if kind not in {"normal", "negative_occupancy"}:
+        raise ValueError("Unknown scenario kind")
     start = datetime(2026, 10, 19, 1, 0, tzinfo=timezone.utc)  # 08:00 Asia/Ho_Chi_Minh
     base_lat, base_lon = 10.77175, 106.69835
     stops = []
@@ -165,7 +167,7 @@ def build_scenario(seed: int = 42) -> dict:
             ("rear", "OUT", flows[3]),
         ):
             for number in range(count):
-                uid = f"SIM-{stop_index + 1:02d}-{camera}-{direction}-{number + 1:03d}"
+                uid = f"SIM-{kind}-{stop_index + 1:02d}-{camera}-{direction}-{number + 1:03d}"
                 events.append(
                     {
                         "event_uuid": uid,
@@ -185,7 +187,7 @@ def build_scenario(seed: int = 42) -> dict:
 
     events.append(
         {
-            "event_uuid": "SIM-UNASSIGNED-CONTROL",
+            "event_uuid": f"SIM-{kind}-UNASSIGNED-CONTROL",
             "camera": "front",
             "direction": "IN",
             "track_id": "front:sim:unassigned",
@@ -199,7 +201,8 @@ def build_scenario(seed: int = 42) -> dict:
         }
     )
     expected = []
-    occupancy = 5
+    initial_occupancy = 8 if kind == "normal" else 0
+    occupancy = initial_occupancy
     for stop, flows in zip(stops, FLOW_MATRIX, strict=True):
         total_in, total_out = flows[0] + flows[2], flows[1] + flows[3]
         occupancy += total_in - total_out
@@ -229,12 +232,12 @@ def build_scenario(seed: int = 42) -> dict:
             "verified": False,
         },
         "trip": {
-            "trip_id": "SIM-R01-20261019-0800",
+            "trip_id": "SIM-R01-20261019-0800" if kind == "normal" else "SIM-R01-NEGATIVE-CONTROL",
             "vehicle_id": "SIM-BUS-01",
             "start_time_utc": _iso(start),
             "end_time_utc": _iso(cursor),
             "mode": "SYNTHETIC_PAIRED",
-            "initial_occupancy": 5,
+            "initial_occupancy": initial_occupancy,
             "status": "COMPLETED",
             "coverage_complete": True,
             "provenance": "SIMULATED",
@@ -245,7 +248,7 @@ def build_scenario(seed: int = 42) -> dict:
         "ground_truth": {
             "stop_visits": visits_truth,
             "flow": expected,
-            "unassigned_event_uuids": ["SIM-UNASSIGNED-CONTROL"],
+            "unassigned_event_uuids": [f"SIM-{kind}-UNASSIGNED-CONTROL"],
         },
         "disclaimer": "Not real GPS, not AI output, and not a claim about Route 01 operations.",
     }

@@ -1,26 +1,21 @@
-# Acceptance checklist
+# Acceptance checklist — 2026-10-20
 
-## Hợp đồng đầu ra
+## Đã kiểm thử bằng thực thi
 
-1. **DONE — tuyến/trip/trạm:** scenario tạo route và 8 trạm có thứ tự; API `/routes`, `/routes/{id}/stops`, `/trips`. Tên/thứ tự có nguồn, tọa độ synthetic và `verified=false`.
-2. **DONE — hai cửa/cả hai chiều:** YOLO11n person + ByteTrack + normalized ROI A/B, anchor cấu hình; FRONT/REAR có detector/tracker/worker riêng. Unit test hai hướng và camera namespace; clip Pexels đã chạy GPU.
-3. **DONE — event:** schema lưu UUID, camera/direction/track/frame/PTS/time/source/confidence/assignment/evidence/provenance; debounce, stable transition, reversal, ID-switch recovery và TTL có test. `event_uuid` unique.
-4. **DONE — StopVisit/assignment:** geofence + speed + dwell + door + sequence; stale/missing data và negative controls có test; cửa sổ auto-assign chỉ nhận `CONFIRMED`, còn lại `UNASSIGNED`; manual audit hoạt động.
-5. **DONE — aggregate:** API/JSON/CSV có front/rear × IN/OUT, total, arrival/departure/evidence/warning và occupancy có điều kiện. Scenario cố ý chứng minh cảnh báo occupancy âm.
-6. **DONE — dashboard MVP:** 6 tab tiếng Việt: tổng quan/chart, hai cửa/ROI, trạm/map/evidence, event/review/export, one-click demo, settings/GPU/provenance. Streamlit AppTest render đủ 6 tab không exception.
-7. **DONE — offline + real-video separation:** one-click deterministic demo không cần network/weights; `SIMULATED_EVENTS` tách `REAL_VIDEO_AI`. Pexels chạy riêng `UNPAIRED`, không ghép vào GPS synthetic.
-8. **DONE/PARTIAL — Windows/CUDA:** cài và chạy trên Windows Python 3.11, RTX 3050/CUDA 13.0; CPU fallback có. API/UI local chạy. **PARTIAL** chỉ ở RTSP vật lý vì không có camera endpoint để soak-test.
+- [x] Hai pipeline MP4 → crossing event → SQLite → telemetry → StopVisit → assignment → flow. Integration test `test_end_to_end.py` dùng video fixture và `FakeDetector`; đây là **software integration**, không phải đo độ chính xác YOLO.
+- [x] Trip/source/camera/provenance không khớp bị từ chối; AI thật không nhập vào synthetic trip; telemetry synthetic không nhập trip thật.
+- [x] GPS missing/stale khi xe dừng và cửa mở không xác nhận rời trạm. RTSP reconnect/timebase được kiểm thử với `VideoCapture` giả; event có capture time riêng processing time.
+- [x] Auto-assign chỉ khi nguồn đã xác nhận đồng bộ, StopVisit confirmed và cửa tương ứng có mẫu mở gần event. Thiếu chứng cứ cửa: `REVIEW_REQUIRED`. Video công khai không GPS cùng nguồn: `UNASSIGNED`.
+- [x] Demo chính 8 StopVisit, 57 event synthetic, 24 IN/32 OUT, initial occupancy 8, occupancy không âm. Kịch bản đối chứng âm tách riêng qua `kind=negative_occupancy`.
+- [x] Có tool gán nhãn video cục bộ và evaluator MAE + precision/recall theo timestamp; không có ground truth thì `N/A`. Metric evaluator có unit test, thao tác GUI gán nhãn chưa được kiểm thử tự động.
+- [x] Streamlit có form khởi chạy inference cho trip thật, hiển thị progress file và annotated MP4. AppTest render 6 tab, 0 exception; chưa có browser E2E cho nút chạy này.
+- [x] Pytest **44 passed**, Ruff sạch, `pip check` sạch; coverage `busreid+backend` **88%**.
+- [x] YOLO+ByteTrack chạy lại 30 frame video Pexels công khai trên RTX 3050: 0 crossing, không có ground truth, không tự gán trạm.
 
-## Nguồn ngoài và validation
+## Chưa kiểm chứng, không nhận là hoàn thành thực địa
 
-- **DONE:** Pexels clip/license/checksum/metadata/frame review; YOLO+ByteTrack inference thật, artifact annotated.
-- **BLOCKED:** PCDS labeled videos chỉ còn BaiYun và không tải hợp lệ trong phiên; AI accuracy là `N/A`.
-- **BLOCKED:** GPS/cửa/two-camera thật cùng chuyến chưa được stakeholder cung cấp; occupancy thật và đồng bộ RTSP chưa kiểm chứng.
-- **PARTIAL:** endpoint chính thức RouteFinding trả HTTP 403; dùng thứ tự trạm nguồn bên thứ ba nhưng tọa độ scenario được gắn synthetic/unverified.
-
-## Bằng chứng
-
-- Tests: `33 passed`, `0 warning`, coverage `86%`; Ruff và pip check sạch.
-- Demo: `runs/demo/flow_by_stop.json`, 8 StopVisit, 57 event, 24 IN/32 OUT.
-- Real video: `runs/pexels_real_video/run_summary.json`, 178 frame, GPU 6.0114 FPS, 69.2075 MiB peak tensor VRAM, no GT.
-- Tài liệu: `README.md`, `ARCHITECTURE.md`, `BUSINESS_RULES.md`, `DATA_SOURCES.md`, `LIMITATIONS.md`, `MIGRATION_REPORT.md`, `TEST_REPORT.md`.
+- [ ] Hai camera thật cùng một chuyến với GPS/cửa thật và ground truth gán nhãn: chưa có dữ liệu.
+- [ ] RTSP vật lý, reconnect nhiều giờ, sai số đồng hồ thiết bị, tải đồng thời dài hạn: chưa có endpoint để thử. Test hiện dùng fake capture.
+- [ ] AI accuracy/MAE/precision/recall trên video cửa xe thật có nhãn: `N/A`.
+- [ ] Nút dashboard inference và GUI labeling đã được kiểm thử tương tác người dùng trên máy triển khai: chưa; chỉ có logic/test và smoke CLI.
+- [ ] Occupancy thật: không hiển thị nếu coverage/ghép cặp chưa xác nhận.

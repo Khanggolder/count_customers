@@ -23,7 +23,7 @@ def test_complete_scenario_exact_counts_and_idempotency(tmp_path) -> None:
             for key, value in expected.items():
                 assert actual[key] == value
             assert actual["visit_status"] == "CONFIRMED"
-        assert flow[-1]["warning"] == "NEGATIVE_OCCUPANCY_REVIEW_REQUIRED"
+        assert all(row["warning"] is None and row["onboard_after_stop"] >= 0 for row in flow)
         assert db.scalar(select(func.count()).select_from(PassengerEventModel)) == len(
             scenario["passenger_events"]
         )
@@ -33,7 +33,25 @@ def test_complete_scenario_exact_counts_and_idempotency(tmp_path) -> None:
                 select(PassengerEventModel).where(PassengerEventModel.assignment_status == "UNASSIGNED")
             )
         )
-        assert [row.event_uuid for row in unassigned] == ["SIM-UNASSIGNED-CONTROL"]
+        assert [row.event_uuid for row in unassigned] == ["SIM-normal-UNASSIGNED-CONTROL"]
+
+
+def test_negative_occupancy_is_separate_control() -> None:
+    scenario = build_scenario(kind="negative_occupancy")
+    assert scenario["ground_truth"]["flow"][-1]["onboard_after_stop"] < 0
+    assert build_scenario()["ground_truth"]["flow"][-1]["onboard_after_stop"] >= 0
+
+
+def test_negative_control_replays_separately_and_warns(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'controls.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as db:
+        normal_id = replay_scenario(db, build_scenario())["trip_id"]
+        negative_id = replay_scenario(db, build_scenario(kind="negative_occupancy"))["trip_id"]
+        assert normal_id != negative_id
+        assert flow_rows(db, normal_id)[-1]["warning"] is None
+        assert flow_rows(db, negative_id)[-1]["warning"] == "NEGATIVE_OCCUPANCY_REVIEW_REQUIRED"
 
 
 def test_synthetic_provenance_is_never_real_ai() -> None:

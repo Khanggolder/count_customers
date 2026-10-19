@@ -117,8 +117,10 @@ class StopVisitDetector:
 
             if active is not None:
                 departed = (
-                    distance > stop.radius_m * self.exit_radius_factor
+                    valid_position
+                    and distance > stop.radius_m * self.exit_radius_factor
                     and (sample.speed_kmh or 0) > self.speed_threshold_kmh
+                    and door is not True
                 )
                 if departed:
                     active.departed_at = sample.event_time_utc

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from threading import Event, Lock
 
@@ -34,20 +35,32 @@ class DualCameraRunner:
     def cancel(self) -> None:
         self.cancel_event.set()
 
-    def _run_one(self, camera: str, source: str, output_dir: Path, max_frames: int | None) -> PipelineResult:
+    def _run_one(
+        self,
+        camera: str,
+        source: str,
+        output_dir: Path,
+        max_frames: int | None,
+        recording_start_time: datetime | None,
+    ) -> PipelineResult:
         with self._lock:
             self.status[camera].state = "RUNNING"
         if self.cancel_event.is_set():
             raise RuntimeError("cancelled")
-        result = CameraPipeline(self.config.cameras[camera], self.config).run(
-            source, output_dir, max_frames=max_frames
-        )
+        options = {"max_frames": max_frames}
+        if recording_start_time is not None:
+            options["recording_start_time"] = recording_start_time
+        result = CameraPipeline(self.config.cameras[camera], self.config).run(source, output_dir, **options)
         with self._lock:
             self.status[camera].state = "COMPLETED"
         return result
 
     def run(
-        self, sources: dict[str, str], output_dir: str | Path, max_frames: int | None = None
+        self,
+        sources: dict[str, str],
+        output_dir: str | Path,
+        max_frames: int | None = None,
+        recording_start_time: datetime | None = None,
     ) -> DualCameraResult:
         valid = {
             camera: source for camera, source in sources.items() if source and camera in self.config.cameras
@@ -59,7 +72,9 @@ class DualCameraRunner:
         destination.mkdir(parents=True, exist_ok=True)
         with ThreadPoolExecutor(max_workers=len(valid), thread_name_prefix="bus-camera") as pool:
             futures: dict[Future, str] = {
-                pool.submit(self._run_one, camera, source, destination, max_frames): camera
+                pool.submit(
+                    self._run_one, camera, source, destination, max_frames, recording_start_time
+                ): camera
                 for camera, source in valid.items()
             }
             for future in as_completed(futures):

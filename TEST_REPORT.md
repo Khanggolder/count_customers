@@ -1,6 +1,6 @@
 # Báo cáo kiểm thử
 
-Ngày chạy: 2026-10-19, Windows, Python 3.11.0.
+Ngày chạy lại: 2026-10-20, Windows, Python 3.11.0.
 
 ## Môi trường
 
@@ -17,7 +17,11 @@ Ngày chạy: 2026-10-19, Windows, Python 3.11.0.
 .\.venv\Scripts\python.exe -m ruff check .
 ```
 
-Kết quả regression cuối với `-W error`: **33 passed**, **0 failed**, **0 warning**, 4.41 giây; combined statement coverage **86%**. Ruff: **All checks passed**. `pip check`: không có dependency hỏng.
+Kết quả regression cuối với `-W error`: **44 passed**, **0 failed**, **0 warning**, 6.23 giây; combined statement coverage **88%**. Ruff: **All checks passed**. `pip check`: không có dependency hỏng.
+
+Integration mới dùng video fixture MP4 hai cửa + `FakeDetector` + telemetry SENSOR + trip thật + StopVisit + bảng flow. Test này xác minh luồng phần mềm, **không đo AI accuracy**. Test API chặn real/synthetic mixing; test GPS stale/missing; test RTSP reconnect bằng fake `VideoCapture`; test event thiếu bằng chứng cửa thành `REVIEW_REQUIRED`; test evaluator `N/A`/MAE/precision/recall.
+
+Streamlit AppTest sau thay đổi: 6 tab, 0 exception ở trạng thái chưa kết nối API. Luồng bấm chạy inference trên browser thật chưa được E2E.
 
 Phạm vi test: A→B/B→A, threshold/reverse/oscillation/multiple people/camera scope, ID switch, TTL; stop giả do tốc độ cao/kẹt xe/đèn đỏ, door missing, GPS missing, thứ tự/repeated stop; assignment/grace/UNASSIGNED/manual audit; clock offset/reconnect monotonic; replay idempotent; hai worker đồng thời và lỗi một camera; aggregate/occupancy âm; API lifecycle/validation/export/run cancel; MP4 pipeline fixture.
 
@@ -30,11 +34,13 @@ Phạm vi test: A→B/B→A, threshold/reverse/oscillation/multiple people/camer
 - 8 StopVisit `CONFIRMED`.
 - 57 event synthetic: 56 event gán trạm + 1 event control `UNASSIGNED`.
 - Tổng theo 8 trạm: 24 IN, 32 OUT; có FRONT OUT và REAR IN.
-- Initial occupancy 5; cuối chuyến -3 và cảnh báo `NEGATIVE_OCCUPANCY_REVIEW_REQUIRED` (không clamp).
+- Demo chính initial occupancy 8; cuối chuyến 0, không có occupancy âm. Kịch bản `negative_occupancy` độc lập dùng initial occupancy 0 để thử cảnh báo.
 - Replay lần hai không tăng row/event.
 - Đây là test nghiệp vụ deterministic, **không phải AI accuracy**.
 
 ## Inference video thật
+
+Smoke mới sau thay đổi: Pexels 31337217, 30 frame trên RTX 3050, 3.1434 processing FPS, 69.2075 MiB peak tensor VRAM, 0 crossing, 0 StopVisit, 0 assigned, `UNPAIRED`, không có GPS cùng nguồn. `run_summary.json` có flow rỗng; ground truth/accuracy vẫn `N/A`. Ultralytics không ghi được settings/cache trong AppData do sandbox quyền hạn nhưng inference hoàn tất exit 0.
 
 Input Pexels 31337217: 3840×2160, 30 FPS, 178 frame, 5.933 s. Command chạy toàn bộ 178 frame với YOLO11n + ByteTrack trên RTX 3050.
 

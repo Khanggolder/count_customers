@@ -5,6 +5,7 @@ import json
 import logging
 import time
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -15,6 +16,7 @@ from .config import AppConfig, CameraConfig
 from .counting import DirectionCounter
 from .detector import PersonDetector
 from .quality import QualitySelector
+from .timebase import SourceClock
 from .types import CrossingEvent, Detection
 from .video import OpenCVVideoSource, VideoMetadata, redact_source
 
@@ -88,6 +90,7 @@ def _write_events(path: Path, events: list[CrossingEvent]) -> None:
         "crop_path",
         "synthetic",
         "created_at",
+        "capture_time_utc",
     ]
     with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -96,6 +99,7 @@ def _write_events(path: Path, events: list[CrossingEvent]) -> None:
             row = asdict(event)
             row["direction"] = event.direction.value
             row["created_at"] = event.created_at.isoformat()
+            row["capture_time_utc"] = event.capture_time_utc.isoformat() if event.capture_time_utc else ""
             writer.writerow(row)
 
 
@@ -123,11 +127,14 @@ class CameraPipeline:
         output_dir: str | Path,
         max_frames: int | None = None,
         on_event: Callable[[CrossingEvent, list[np.ndarray]], None] | None = None,
+        recording_start_time: datetime | None = None,
     ) -> PipelineResult:
         destination = Path(output_dir)
         destination.mkdir(parents=True, exist_ok=True)
         source = OpenCVVideoSource(source_path)
         metadata = source.open()
+        clock = SourceClock(recording_start_time or datetime.now(timezone.utc), self.camera.time_offset_ms)
+        generation = source.generation
         annotated = destination / f"{self.camera.name}_annotated.mp4"
         events_file = destination / f"{self.camera.name}_events.csv"
         writer = cv2.VideoWriter(
@@ -141,6 +148,7 @@ class CameraPipeline:
             raise RuntimeError(f"Không tạo được video output: {annotated}")
         events: list[CrossingEvent] = []
         counts = {"IN": 0, "OUT": 0}
+        progress_path = destination / f"{self.camera.name}_progress.json"
         frame_index = 0
         device_name = "CPU"
         peak_vram_mb: float | None = None
@@ -158,11 +166,16 @@ class CameraPipeline:
                 ok, frame, timestamp_s = source.read()
                 if not ok or frame is None:
                     break
+                if source.generation != generation:
+                    clock.reconnect()
+                    generation = source.generation
+                capture_time = clock.map_pts(timestamp_s)
                 detections = self.detector.track(frame)
                 for detection in detections:
                     self.quality.consider(frame, detection, frame_index)
                     event = self.counter.update(detection, frame.shape, frame_index, timestamp_s)
                     if event is not None:
+                        event.capture_time_utc = capture_time if recording_start_time else None
                         crops = [item.image for item in self.quality.pop(detection.track_id)]
                         if crops:
                             crop_dir = destination / "crops"
@@ -180,6 +193,18 @@ class CameraPipeline:
                 self.counter.prune_stale(frame_index)
                 writer.write(annotate_frame(frame, detections, self.camera, counts))
                 frame_index += 1
+                if frame_index % 10 == 0:
+                    progress_path.write_text(
+                        json.dumps(
+                            {
+                                "frames": frame_index,
+                                "total_frames": metadata.frame_count,
+                                "events": len(events),
+                                "status": "RUNNING",
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
         finally:
             writer.release()
             source.close()
@@ -192,6 +217,17 @@ class CameraPipeline:
         except ImportError:
             pass
         _write_events(events_file, events)
+        progress_path.write_text(
+            json.dumps(
+                {
+                    "frames": frame_index,
+                    "total_frames": metadata.frame_count,
+                    "events": len(events),
+                    "status": "COMPLETED",
+                }
+            ),
+            encoding="utf-8",
+        )
         result = PipelineResult(
             camera=self.camera.name,
             input_path=redact_source(source_path),

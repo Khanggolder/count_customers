@@ -13,8 +13,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from busreid.scenario import build_scenario
-from busreid.service import flow_rows, replay_scenario, update_assignment
-from busreid.stop_detection import StopPoint, StopVisitDetector, TelemetryPoint, assign_visit
+from busreid.service import (
+    detect_and_assign,
+    flow_rows,
+    replay_scenario,
+    update_assignment,
+    validate_event_source,
+)
 
 from .database import Base, engine, get_db
 from .models import (
@@ -143,6 +148,8 @@ def route_stops(route_id: str, db: Session = Depends(get_db)) -> list[dict]:
 
 @app.post("/trips", status_code=201)
 def create_trip(payload: TripCreate, db: Session = Depends(get_db)) -> dict:
+    if payload.mode == "SYNTHETIC_PAIRED":
+        raise HTTPException(422, "Create synthetic trips through the scenario generator")
     if db.get(RouteModel, payload.route_id) is None:
         raise HTTPException(422, "route_id chưa tồn tại")
     row = TripModel(
@@ -191,7 +198,9 @@ def stop_trip(trip_id: str, db: Session = Depends(get_db)) -> dict:
 
 @app.post("/trips/{trip_id}/telemetry", status_code=201)
 def ingest_telemetry(trip_id: str, payload: list[TelemetryCreate], db: Session = Depends(get_db)) -> dict:
-    _trip_or_404(trip_id, db)
+    trip = _trip_or_404(trip_id, db)
+    if any((sample.source == "SIMULATED") != (trip.provenance == "SIMULATED") for sample in payload):
+        raise HTTPException(422, "Telemetry provenance conflicts with trip provenance")
     created = 0
     existing = set(
         db.scalars(select(TelemetrySampleModel.event_time_utc).where(TelemetrySampleModel.trip_id == trip_id))
@@ -263,75 +272,11 @@ def stop_visits(trip_id: str, db: Session = Depends(get_db)) -> list[dict]:
 
 @app.post("/trips/{trip_id}/detect-stop-visits")
 def detect_stop_visits(trip_id: str, db: Session = Depends(get_db)) -> dict:
-    trip = _trip_or_404(trip_id, db)
-    stops = list(
-        db.scalars(select(StopModel).where(StopModel.route_id == trip.route_id).order_by(StopModel.sequence))
-    )
-    telemetry = list(
-        db.scalars(
-            select(TelemetrySampleModel)
-            .where(TelemetrySampleModel.trip_id == trip_id)
-            .order_by(TelemetrySampleModel.event_time_utc)
-        )
-    )
-    detector = StopVisitDetector(
-        [StopPoint(row.stop_id, row.sequence, row.latitude, row.longitude, row.radius_m) for row in stops]
-    )
-    detected = detector.detect(
-        [
-            TelemetryPoint(
-                row.event_time_utc.replace(tzinfo=timezone.utc)
-                if row.event_time_utc.tzinfo is None
-                else row.event_time_utc,
-                row.latitude,
-                row.longitude,
-                row.speed_kmh,
-                row.door_front,
-                row.door_rear,
-                row.quality,
-            )
-            for row in telemetry
-        ]
-    )
-    visit_ids: dict[str, str] = {}
-    created = 0
-    for visit in detected:
-        visit_id = f"{trip_id}:{visit.stop_id}:{int(visit.arrived_at.timestamp())}"
-        visit_ids[visit.stop_id] = visit_id
-        if db.get(StopVisitModel, visit_id) is None:
-            db.add(
-                StopVisitModel(
-                    stop_visit_id=visit_id,
-                    trip_id=trip_id,
-                    stop_id=visit.stop_id,
-                    arrived_at=visit.arrived_at,
-                    departed_at=visit.departed_at,
-                    status=visit.status,
-                    evidence=visit.evidence,
-                    confidence=visit.confidence,
-                    override_audit=[],
-                )
-            )
-            created += 1
-    assigned = 0
-    events = db.scalars(
-        select(PassengerEventModel).where(
-            PassengerEventModel.trip_id == trip_id, PassengerEventModel.assignment_status == "UNASSIGNED"
-        )
-    )
-    for event in events:
-        event_time = (
-            event.event_time_utc.replace(tzinfo=timezone.utc)
-            if event.event_time_utc.tzinfo is None
-            else event.event_time_utc
-        )
-        stop_id = assign_visit(event_time, detected)
-        if stop_id and stop_id in visit_ids:
-            event.stop_visit_id = visit_ids[stop_id]
-            event.assignment_status = "AUTO_ASSIGNED"
-            assigned += 1
-    db.commit()
-    return {"detected": len(detected), "created": created, "events_assigned": assigned}
+    _trip_or_404(trip_id, db)
+    try:
+        return detect_and_assign(db, trip_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @app.get("/trips/{trip_id}/passenger-events")
@@ -355,6 +300,12 @@ def create_passenger_event(
     trip_id: str, payload: PassengerEventCreate, db: Session = Depends(get_db)
 ) -> dict:
     _trip_or_404(trip_id, db)
+    try:
+        validate_event_source(
+            db, trip_id, payload.source_id, payload.camera, payload.provenance, payload.source_type
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     existing = db.scalar(
         select(PassengerEventModel).where(PassengerEventModel.event_uuid == payload.event_uuid)
     )
@@ -413,6 +364,8 @@ def trip_flow(trip_id: str, db: Session = Depends(get_db)) -> list[dict]:
         return flow_rows(db, trip_id)
     except KeyError as exc:
         raise HTTPException(404, "Không tìm thấy chuyến") from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.get("/trips/{trip_id}/exports")
@@ -439,8 +392,10 @@ def export_trip(
 
 
 @app.post("/demo/generate", status_code=201)
-def generate_demo(db: Session = Depends(get_db)) -> dict:
-    return replay_scenario(db, build_scenario())
+def generate_demo(
+    kind: str = Query("normal", pattern="^(normal|negative_occupancy)$"), db: Session = Depends(get_db)
+) -> dict:
+    return replay_scenario(db, build_scenario(kind=kind))
 
 
 @app.post("/runs", status_code=201)
