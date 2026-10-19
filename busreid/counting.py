@@ -6,6 +6,7 @@ from enum import StrEnum
 import cv2
 import numpy as np
 
+from .business import validate_passenger_direction
 from .types import CrossingEvent, Detection, Direction
 
 
@@ -50,6 +51,7 @@ class DirectionCounter:
     ) -> None:
         if min_stable_frames < 1:
             raise ValueError("min_stable_frames phải >= 1")
+        validate_passenger_direction(camera, forward_direction)
         self.camera = camera
         self.zone_a_normalized = zone_a
         self.zone_b_normalized = zone_b
@@ -137,16 +139,14 @@ class DirectionCounter:
             return None
 
         forward = origin == Zone.A and zone == Zone.B
-        direction = (
-            self.forward_direction
-            if forward
-            else (Direction.OUT if self.forward_direction == Direction.IN else Direction.IN)
-        )
+        if not forward:
+            # Reverse travel is not a passenger event and must not consume cooldown.
+            return None
         state.last_event_frame = frame_index
         return CrossingEvent(
             camera=self.camera,
             track_id=detection.track_id,
-            direction=direction,
+            direction=self.forward_direction,
             frame_index=frame_index,
             timestamp_s=timestamp_s,
             confidence=detection.confidence,

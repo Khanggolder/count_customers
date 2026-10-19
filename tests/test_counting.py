@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from busreid.counting import DirectionCounter
 from busreid.types import Detection, Direction
 
@@ -32,10 +34,33 @@ def test_standing_at_threshold_is_not_counted() -> None:
     assert feed(counter, "front:track00001", [50] * 20) == []
 
 
-def test_reverse_direction_emits_out() -> None:
+def test_front_reverse_direction_does_not_emit_out() -> None:
     counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 2, 2)
     events = feed(counter, "front:track00001", [80, 80, 50, 50, 20, 20])
-    assert [event.direction for event in events] == [Direction.OUT]
+    assert events == []
+
+
+def test_rear_reverse_direction_does_not_emit_in() -> None:
+    counter = DirectionCounter("rear", ZONE_A, ZONE_B, Direction.OUT, 2, 2)
+    assert feed(counter, "rear:track00001", [80, 80, 50, 50, 20, 20]) == []
+
+
+def test_counter_rejects_wrong_camera_policy() -> None:
+    with pytest.raises(ValueError, match="accepts only IN"):
+        DirectionCounter("front", ZONE_A, ZONE_B, Direction.OUT)
+    with pytest.raises(ValueError, match="accepts only OUT"):
+        DirectionCounter("rear", ZONE_A, ZONE_B, Direction.IN)
+
+
+def test_reverse_then_forward_does_not_consume_cooldown() -> None:
+    counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 1, 20)
+    events = feed(counter, "front:track00001", [80, 20, 80])
+    assert [event.direction for event in events] == [Direction.IN]
+
+
+def test_approach_then_turn_back_is_not_counted() -> None:
+    counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 2, 5)
+    assert feed(counter, "front:track00001", [20, 20, 50, 50, 20, 20]) == []
 
 
 def test_oscillation_debounced() -> None:

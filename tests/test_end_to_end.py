@@ -189,7 +189,7 @@ def test_real_inference_rejects_synthetic_trip_before_video_work(tmp_path: Path,
                 "--front",
                 str(video),
                 "--trip-id",
-                "SIM-R01-20261019-0800",
+                "SIM-R01-v2-20261019-0800",
                 "--output",
                 str(tmp_path / "output"),
             ]

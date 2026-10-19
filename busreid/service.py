@@ -17,6 +17,7 @@ from backend.models import (
     TelemetrySampleModel,
     TripModel,
 )
+from busreid.business import validate_passenger_direction
 from busreid.stop_detection import StopPoint, StopVisitDetector, TelemetryPoint, assign_visit
 
 
@@ -121,6 +122,11 @@ def detect_and_assign(db: Session, trip_id: str) -> dict:
         )
     )
     for event in events:
+        try:
+            validate_passenger_direction(event.camera, event.direction)
+        except ValueError:
+            # Retain legacy rows for audit without assigning or counting them.
+            continue
         source = validate_event_source(
             db, trip_id, event.source_id, event.camera, event.provenance, event.source_type
         )
@@ -165,7 +171,15 @@ def detect_and_assign(db: Session, trip_id: str) -> dict:
 
 
 def replay_scenario(db: Session, scenario: dict) -> dict:
+    if scenario.get("schema_version") != "2.0":
+        raise ValueError("Only FRONT-IN/REAR-OUT scenario schema 2.0 may be replayed")
     route_data, trip_data = scenario["route"], scenario["trip"]
+    if trip_data["provenance"] != "SIMULATED":
+        raise ValueError("Scenario trip must be SIMULATED")
+    for item in scenario["passenger_events"]:
+        validate_passenger_direction(item["camera"], item["direction"])
+        if item["source_type"] != "SIMULATED_EVENT_GENERATOR" or item["provenance"] != "SIMULATED_EVENTS":
+            raise ValueError("Scenario event must retain synthetic provenance")
     route = db.get(RouteModel, route_data["route_id"])
     if route is None:
         route = RouteModel(**route_data)
@@ -186,6 +200,8 @@ def replay_scenario(db: Session, scenario: dict) -> dict:
         db.add(trip)
     elif trip.provenance != "SIMULATED":
         raise ValueError("Scenario cannot be replayed into a real trip")
+    elif trip.mode != "SYNTHETIC_PAIRED" or trip.initial_occupancy != trip_data["initial_occupancy"]:
+        raise ValueError("Existing scenario trip metadata conflicts with schema 2.0")
     for camera in ("front", "rear"):
         source_id = f"{trip_data['trip_id']}:{camera}:sim"
         if db.get(CameraSourceModel, source_id) is None:
@@ -319,7 +335,14 @@ def flow_rows(db: Session, trip_id: str) -> list[dict]:
     events = list(db.scalars(select(PassengerEventModel).where(PassengerEventModel.trip_id == trip_id)))
     for event in events:
         validate_event_source(db, trip_id, event.source_id, event.camera, event.provenance, event.source_type)
-    occupancy_valid = trip.mode in {"PAIRED_VERIFIED", "SYNTHETIC_PAIRED"} and trip.coverage_complete
+    sources = list(db.scalars(select(CameraSourceModel).where(CameraSourceModel.trip_id == trip_id)))
+    required_flag = "SYNTHETIC_PAIRED" if trip.provenance == "SIMULATED" else "PAIRED_VERIFIED"
+    paired_roles = {source.door_role for source in sources if source.paired_flag == required_flag}
+    occupancy_valid = (
+        trip.mode in {"PAIRED_VERIFIED", "SYNTHETIC_PAIRED"}
+        and trip.coverage_complete
+        and paired_roles == {"FRONT", "REAR"}
+    )
     occupancy = trip.initial_occupancy
     rows = []
     for stop in stops:
@@ -327,10 +350,14 @@ def flow_rows(db: Session, trip_id: str) -> list[dict]:
         counts = {"front_in": 0, "front_out": 0, "rear_in": 0, "rear_out": 0}
         if visit:
             for event in events:
-                if event.stop_visit_id == visit.stop_visit_id:
+                if (
+                    event.stop_visit_id == visit.stop_visit_id
+                    and event.assignment_status in {"AUTO_ASSIGNED", "MANUAL_ASSIGNED"}
+                    and (event.camera, event.direction) in {("FRONT", "IN"), ("REAR", "OUT")}
+                ):
                     counts[f"{event.camera.lower()}_{event.direction.lower()}"] += 1
-        total_in = counts["front_in"] + counts["rear_in"]
-        total_out = counts["front_out"] + counts["rear_out"]
+        total_in = counts["front_in"]
+        total_out = counts["rear_out"]
         warning = None
         onboard = None
         if occupancy_valid:
@@ -347,6 +374,8 @@ def flow_rows(db: Session, trip_id: str) -> list[dict]:
                 **counts,
                 "total_in": total_in,
                 "total_out": total_out,
+                "boarding_count": total_in,
+                "alighting_count": total_out,
                 "onboard_after_stop": onboard,
                 "arrived_at": visit.arrived_at.isoformat() if visit else None,
                 "departed_at": visit.departed_at.isoformat() if visit and visit.departed_at else None,
@@ -367,6 +396,7 @@ def update_assignment(
     validate_event_source(
         db, event.trip_id, event.source_id, event.camera, event.provenance, event.source_type
     )
+    validate_passenger_direction(event.camera, event.direction)
     if stop_visit_id is not None:
         visit = db.get(StopVisitModel, stop_visit_id)
         if visit is None or visit.trip_id != event.trip_id:

@@ -19,6 +19,7 @@ from backend.models import (  # noqa: E402
     TripModel,
 )
 from backend.schemas import TelemetryCreate  # noqa: E402
+from busreid.business import validate_passenger_direction  # noqa: E402
 from busreid.config import load_config  # noqa: E402
 from busreid.service import detect_and_assign, flow_rows, validate_event_source  # noqa: E402
 from busreid.video import redact_source  # noqa: E402
@@ -79,6 +80,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--telemetry-synchronized requires --recording-start-time")
     config = load_config(args.config)
     sources = {key: value for key, value in (("front", args.front), ("rear", args.rear)) if value}
+    if args.paired_verified and (not args.telemetry_synchronized or len(sources) != 2):
+        parser.error("--paired-verified requires both cameras and synchronized telemetry/capture time")
     Base.metadata.create_all(bind=engine)
     created = datetime.now(timezone.utc)
     trip_id = args.trip_id or f"VIDEO-{created.strftime('%Y%m%dT%H%M%SZ')}"
@@ -128,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             trip.status = "COMPLETED" if not outcome.errors else "PARTIAL"
             trip.provenance = "REAL_VIDEO_AI"
+            if args.paired_verified:
+                trip.mode = "PAIRED_VERIFIED"
         for camera, source in sources.items():
             source_id = f"{trip_id}:{camera}"
             existing_source = db.get(CameraSourceModel, source_id)
@@ -140,12 +145,24 @@ def main(argv: list[str] | None = None) -> int:
                         input_type=source_type(source),
                         safe_uri=redact_source(source),
                         calibration_id=f"{camera}-yaml",
-                        paired_flag="SYNCHRONIZED" if args.telemetry_synchronized else "UNPAIRED",
+                        paired_flag=(
+                            "PAIRED_VERIFIED"
+                            if args.paired_verified
+                            else "SYNCHRONIZED"
+                            if args.telemetry_synchronized
+                            else "UNPAIRED"
+                        ),
                         time_offset_ms=config.cameras[camera].time_offset_ms,
                     )
                 )
             else:
-                existing_source.paired_flag = "SYNCHRONIZED" if args.telemetry_synchronized else "UNPAIRED"
+                existing_source.paired_flag = (
+                    "PAIRED_VERIFIED"
+                    if args.paired_verified
+                    else "SYNCHRONIZED"
+                    if args.telemetry_synchronized
+                    else "UNPAIRED"
+                )
         db.flush()
         if args.telemetry_json:
             samples = json.loads(args.telemetry_json.read_text(encoding="utf-8"))
@@ -171,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
                     existing_times.add(when)
         for camera, result in outcome.results.items():
             for event in result.events:
+                validate_passenger_direction(camera, event.direction)
                 capture_time = event.capture_time_utc or event.created_at
                 validate_event_source(
                     db,

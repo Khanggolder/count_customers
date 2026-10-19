@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
@@ -33,7 +34,11 @@ def test_complete_scenario_exact_counts_and_idempotency(tmp_path) -> None:
                 select(PassengerEventModel).where(PassengerEventModel.assignment_status == "UNASSIGNED")
             )
         )
-        assert [row.event_uuid for row in unassigned] == ["SIM-normal-UNASSIGNED-CONTROL"]
+        assert [row.event_uuid for row in unassigned] == ["SIM-v2-normal-UNASSIGNED-CONTROL"]
+        assert all(
+            (row.camera, row.direction) in {("FRONT", "IN"), ("REAR", "OUT")}
+            for row in db.scalars(select(PassengerEventModel))
+        )
 
 
 def test_negative_occupancy_is_separate_control() -> None:
@@ -58,3 +63,15 @@ def test_synthetic_provenance_is_never_real_ai() -> None:
     scenario = build_scenario()
     assert all(item["provenance"] == "SIMULATED_EVENTS" for item in scenario["passenger_events"])
     assert scenario["trip"]["provenance"] == "SIMULATED"
+
+
+def test_v1_replay_is_rejected_without_mutating_history(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'versions.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    scenario = build_scenario()
+    scenario["schema_version"] = "1.0"
+    with factory() as db:
+        with pytest.raises(ValueError, match="schema 2.0"):
+            replay_scenario(db, scenario)
+        assert db.scalar(select(func.count()).select_from(PassengerEventModel)) == 0

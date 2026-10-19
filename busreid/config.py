@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from .business import validate_passenger_direction
 from .types import Direction
 
 
@@ -53,6 +54,9 @@ def load_config(path: str | Path = "configs/cameras.yaml") -> AppConfig:
         raw = yaml.safe_load(handle)
     cameras: dict[str, CameraConfig] = {}
     for name, value in raw["cameras"].items():
+        if value["role"].upper() != name.upper():
+            raise ValueError(f"Camera {name} role must match its FRONT/REAR identity")
+        validate_passenger_direction(name, value["event_direction"])
         cameras[name] = CameraConfig(
             name=name,
             role=value["role"],

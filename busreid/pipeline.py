@@ -12,6 +12,7 @@ from typing import Callable
 import cv2
 import numpy as np
 
+from .business import validate_passenger_direction
 from .config import AppConfig, CameraConfig
 from .counting import DirectionCounter
 from .detector import PersonDetector
@@ -65,10 +66,11 @@ def annotate_frame(
             1,
             cv2.LINE_AA,
         )
-    cv2.rectangle(output, (0, 0), (310, 42), (10, 17, 30), -1)
+    cv2.rectangle(output, (0, 0), (440, 42), (10, 17, 30), -1)
+    label = "FRONT - BOARDING / IN" if camera.name.lower() == "front" else "REAR - ALIGHTING / OUT"
     cv2.putText(
         output,
-        f"{camera.name.upper()}  IN {counts['IN']}  OUT {counts['OUT']}",
+        f"{label}: {counts[camera.event_direction.value]}",
         (10, 28),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,
@@ -107,6 +109,7 @@ class CameraPipeline:
     def __init__(
         self, camera: CameraConfig, config: AppConfig, detector: PersonDetector | None = None
     ) -> None:
+        validate_passenger_direction(camera.name, camera.event_direction)
         self.camera = camera
         self.detector = detector or PersonDetector(camera.name, **asdict(config.detector))
         self.counter = DirectionCounter(

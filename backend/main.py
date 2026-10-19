@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from busreid.business import validate_passenger_direction
 from busreid.scenario import build_scenario
 from busreid.service import (
     detect_and_assign,
@@ -68,6 +69,7 @@ def _event_dict(row: PassengerEventModel) -> dict:
         "source_id": row.source_id,
         "camera": row.camera,
         "direction": row.direction,
+        "policy_valid": (row.camera, row.direction) in {("FRONT", "IN"), ("REAR", "OUT")},
         "track_id": row.track_id,
         "video_frame": row.video_frame,
         "source_pts": row.source_pts,
@@ -301,6 +303,7 @@ def create_passenger_event(
 ) -> dict:
     _trip_or_404(trip_id, db)
     try:
+        validate_passenger_direction(payload.camera, payload.direction)
         validate_event_source(
             db, trip_id, payload.source_id, payload.camera, payload.provenance, payload.source_type
         )
@@ -310,6 +313,8 @@ def create_passenger_event(
         select(PassengerEventModel).where(PassengerEventModel.event_uuid == payload.event_uuid)
     )
     if existing is not None:
+        if existing.trip_id != trip_id or existing.source_id != payload.source_id:
+            raise HTTPException(409, "event_uuid already belongs to a different trip/source")
         return {**_event_dict(existing), "duplicate": True}
     row = PassengerEventModel(
         trip_id=trip_id,

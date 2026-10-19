@@ -10,7 +10,7 @@ Scenario và ground truth nằm cùng artifact nhưng ở hai nhánh riêng. Pas
 
 `MP4/RTSP FRONT + MP4/RTSP REAR → ThreadPoolExecutor (2 worker độc lập) → YOLO person → ByteTrack → ROI A/B counter → PassengerEvent → SQLite`
 
-Mỗi camera tạo một `PersonDetector`, ByteTrack persistent namespace và `DirectionCounter`. State có debounce, stable transition, ID-switch recovery thận trọng, TTL và crop buffer hữu hạn. Worker lỗi được ghi riêng; worker còn lại vẫn hoàn tất.
+Mỗi camera tạo một `PersonDetector`, ByteTrack persistent namespace và `DirectionCounter`. ROI A→B tương ứng FRONT-IN hoặc REAR-OUT; B→A không tạo PassengerEvent và không chiếm cooldown. State có debounce, stable transition, ID-switch recovery thận trọng, TTL và crop buffer hữu hạn. Worker lỗi được ghi riêng; worker còn lại vẫn hoàn tất.
 
 Video file dùng PTS/fps và chỉ có absolute capture time khi người vận hành truyền `recording_start_time`. RTSP reconnect giữ generation clock monotonic. Source URI được redaction trước khi lưu.
 
@@ -24,7 +24,7 @@ Event thật chỉ auto-assign khi source cùng trip/cửa/provenance, clock cap
 
 SQLAlchemy/SQLite gồm Route, Stop, Trip, CameraSource, TelemetrySample, StopVisit, PassengerEvent, ReviewAudit và Run. `event_uuid` unique bảo đảm replay idempotent; index bao phủ trip/time và trip/stop.
 
-Occupancy chỉ tính khi `mode ∈ {PAIRED_VERIFIED, SYNTHETIC_PAIRED}` và `coverage_complete=true`. Số âm không bị clamp mà tạo cảnh báo.
+Occupancy chỉ tính `initial + FRONT-IN - REAR-OUT` khi trip có mode phù hợp, đủ coverage và cả hai CameraSource có paired flag xác nhận tương ứng. Số âm không bị clamp mà tạo cảnh báo. API/CLI/replay áp dụng cùng bộ kiểm tra hướng. Bản ghi lịch sử sai chiều không bị xóa, nhưng flow/CSV/JSON bỏ qua; `front_out` và `rear_in` là cột tương thích luôn bằng 0.
 
 ## Triển khai
 

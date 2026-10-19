@@ -64,8 +64,8 @@ with overview_tab:
         total_out = sum(row["total_out"] for row in flow)
         assigned_stops = sum(row["visit_status"] == "CONFIRMED" for row in flow)
         cols = st.columns(4)
-        cols[0].metric("Tổng IN", total_in)
-        cols[1].metric("Tổng OUT", total_out)
+        cols[0].metric("Khách lên · cửa trước", total_in)
+        cols[1].metric("Khách xuống · cửa sau", total_out)
         cols[2].metric("Trạm xác nhận", f"{assigned_stops}/{len(flow)}")
         cols[3].metric("Ghép nguồn", trip["mode"])
         if flow:
@@ -73,7 +73,7 @@ with overview_tab:
             chart = px.bar(
                 chart_data,
                 x="stop_name",
-                y=["total_in", "total_out"],
+                y=["boarding_count", "alighting_count"],
                 barmode="group",
                 labels={"value": "Lượt", "stop_name": "Trạm", "variable": "Chiều"},
             )
@@ -84,11 +84,9 @@ with overview_tab:
                         "sequence",
                         "stop_name",
                         "front_in",
-                        "front_out",
-                        "rear_in",
                         "rear_out",
-                        "total_in",
-                        "total_out",
+                        "boarding_count",
+                        "alighting_count",
                         "onboard_after_stop",
                         "visit_status",
                         "warning",
@@ -100,12 +98,18 @@ with overview_tab:
 
 with cameras_tab:
     st.subheader("Hai pipeline camera độc lập")
-    st.info("FRONT và REAR có YOLO/ByteTrack/counter riêng và chạy song song. Mỗi cửa đếm cả IN lẫn OUT.")
+    st.info(
+        "Cửa trước chỉ đếm khách lên (IN); cửa sau chỉ đếm khách xuống (OUT). Hai pipeline YOLO/ByteTrack độc lập."
+    )
     config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     left, right = st.columns(2)
     for column, camera in ((left, "front"), (right, "rear")):
         with column:
-            st.markdown(f"### {camera.upper()}")
+            st.markdown(
+                "### Camera cửa trước – Hành khách lên / IN"
+                if camera == "front"
+                else "### Camera cửa sau – Hành khách xuống / OUT"
+            )
             st.json(config["cameras"][camera])
             video_path = st.text_input(f"Annotated MP4 {camera}", key=f"video_{camera}")
             if video_path:
@@ -236,6 +240,11 @@ with stops_tab:
 with events_tab:
     if selected_trip:
         events = api("GET", f"/trips/{selected_trip}/passenger-events?limit=5000") or []
+        invalid_history = sum(not row.get("policy_valid", True) for row in events)
+        if invalid_history:
+            st.warning(
+                f"{invalid_history} event lịch sử sai chiều: giữ để kiểm toán, không tính vào lưu lượng/occupancy."
+            )
         statuses = ["ALL", "AUTO_ASSIGNED", "MANUAL_ASSIGNED", "REVIEW_REQUIRED", "UNASSIGNED"]
         selected_status = st.selectbox("Trạng thái gán trạm", statuses)
         shown = (
@@ -282,7 +291,7 @@ with events_tab:
 with demo_tab:
     st.error("DỮ LIỆU MÔ PHỎNG / SIMULATED EVENTS")
     st.write(
-        "Nút dưới tạo và replay một chuyến 8 trạm deterministic gồm GPS, tốc độ, cửa, hai chiều ở hai cửa và các tình huống đối chứng. Không tải model, không cần Internet."
+        "Kịch bản tám trạm có GPS, tốc độ và cảm biến cửa. Chỉ FRONT-IN và REAR-OUT là sự kiện khách hợp lệ. Đây là dữ liệu mô phỏng, không phải kết quả AI."
     )
     if st.button("Tạo hoặc replay chuyến mẫu", type="primary"):
         result = api("POST", "/demo/generate")
@@ -295,7 +304,7 @@ with demo_tab:
             st.warning(f"Đã tạo kịch bản đối chứng: {result['trip_id']}")
             st.rerun()
     st.markdown(
-        "Các ca đối chứng: dừng đèn đỏ gần trạm nhưng cửa đóng; tốc độ 0 ngoài geofence; cửa mở ngoài trạm; GPS mất; event ngoài StopVisit; FRONT có OUT và REAR có IN."
+        "Các ca đối chứng: dừng đèn đỏ gần trạm nhưng cửa đóng; tốc độ 0 ngoài geofence; cửa mở ngoài trạm; GPS mất; event ngoài StopVisit. Chuyển động sai chiều không sinh PassengerEvent."
     )
 
 with settings_tab:

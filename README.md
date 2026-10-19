@@ -1,8 +1,8 @@
 # BusStop Flow AI
 
-MVP end-to-end đếm hành khách `IN/OUT` ở hai cửa và tổng hợp theo từng lần xe phục vụ trạm. Hệ thống giữ YOLO11n, ByteTrack, MP4/RTSP, FastAPI, SQLite và Streamlit; Person Re-ID đã được loại khỏi runtime/UI.
+MVP end-to-end đếm khách **lên ở cửa trước (FRONT-IN)** và **xuống ở cửa sau (REAR-OUT)**, rồi tổng hợp theo từng lần xe phục vụ trạm. Đây là giả định vận hành bắt buộc; đơn vị vận tải phải duy trì quy tắc một chiều này khi triển khai. Hệ thống giữ YOLO11n, ByteTrack, MP4/RTSP, FastAPI, SQLite và Streamlit; không có Person Re-ID.
 
-Demo mặc định chạy hoàn toàn offline sau khi cài dependency. Nó tạo một chuyến deterministic 8 trạm với GPS/tốc độ/cửa và event hai chiều ở hai cửa. Mọi màn hình/API đều gắn nhãn `SIMULATED`; đây là kiểm thử nghiệp vụ, không phải độ chính xác AI.
+Demo mặc định chạy offline sau khi cài dependency. Scenario v2 tạo chuyến 8 trạm với GPS/tốc độ/cửa và chỉ có event FRONT-IN, REAR-OUT. Mọi màn hình/API đều gắn nhãn `SIMULATED`; đây là kiểm thử nghiệp vụ, không phải độ chính xác AI.
 
 ## Cài đặt Windows 11
 
@@ -88,7 +88,7 @@ Thay path MP4 bằng `rtsp://...`. Mỗi camera có worker, tracker, ROI, clock 
 
 Sửa `configs/cameras.yaml` cho từng góc quay:
 
-- `zone_a`, `zone_b`: polygon normalized; A→B mang hướng `event_direction`, B→A là chiều ngược lại.
+- `zone_a`, `zone_b`: polygon normalized; A→B là chiều hợp lệ của từng camera (FRONT-IN, REAR-OUT). B→A bị bỏ khỏi PassengerEvent và không chiếm cooldown. Cấu hình sai camera/hướng bị từ chối.
 - `anchor_mode`: `bottom_center` hoặc `center`.
 - `min_stable_frames`, `debounce_frames`, `state_ttl_frames`: chống rung/trùng và giới hạn bộ nhớ state.
 - `time_offset_ms`: offset clock riêng camera.
@@ -111,7 +111,7 @@ Lệnh dùng trip hiện có, tạo/kiểm tra `CameraSource`, chạy hai pipeli
 
 Dashboard tab **Hai cửa** cho chọn trip thật, FRONT/REAR, telemetry, capture start, xem progress theo frame và video annotated sau khi xong. Đây là subprocess cục bộ Windows; không dùng làm dịch vụ inference nhiều người dùng. Các endpoint `/runs` hiện chỉ lưu metadata, chưa phải job queue chạy inference. `runs/` và video không được commit.
 
-Demo chính: `POST /demo/generate` có 8 trạm, 57 event synthetic, occupancy ban đầu 8 và không âm. Đối chứng lỗi riêng: `POST /demo/generate?kind=negative_occupancy`, occupancy ban đầu 0 và có cảnh báo âm. Cả hai đều không phải AI output.
+Demo chính: `POST /demo/generate` có 8 trạm, 44 event synthetic (43 gán trạm, 1 UNASSIGNED), 18 khách lên/25 khách xuống, occupancy ban đầu 8 và cuối chuyến 1. Đối chứng lỗi riêng: `POST /demo/generate?kind=negative_occupancy`, occupancy ban đầu 0 và có cảnh báo âm. Cả hai đều không phải AI output. Schema v2 dùng trip ID `SIM-R01-v2-20261019-0800`; dữ liệu scenario v1 trong SQLite không bị xóa, replay v1 bị từ chối. Flow/export mới loại các event lịch sử FRONT-OUT/REAR-IN; cột cũ `front_out`/`rear_in` còn trong API để tương thích nhưng luôn 0 trong thống kê hợp lệ.
 
 Gán nhãn thủ công và đánh giá:
 

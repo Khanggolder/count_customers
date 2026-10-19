@@ -1,5 +1,15 @@
 # Báo cáo kiểm thử
 
+## Refactor quy tắc FRONT-IN / REAR-OUT — 2026-10-20
+
+Chạy lại trên Windows/Python 3.11 tại commit đang chuẩn bị: `pytest --cov=busreid --cov=backend -W error` **50 passed, 88% coverage**, 0 warning; `ruff check .` **All checks passed**; `pip check` **No broken requirements found**.
+
+`scripts/run_demo.py` đã chạy hai lần trên cùng SQLite: cùng trip `SIM-R01-v2-20261019-0800`, 8 StopVisit, 44 event synthetic (43 gán trạm + 1 UNASSIGNED), không tăng bản ghi khi replay. Tổng flow FRONT-IN **18**, REAR-OUT **25**; occupancy ban đầu 8, sau từng trạm **12, 13, 12, 15, 12, 11, 9, 1**, không âm. Kịch bản âm được test riêng, không đưa vào demo chính. Các test mới xác nhận reverse không phát event/không chiếm cooldown, API 422 khi sai cặp, dữ liệu lịch sử sai chiều giữ nguyên trong DB nhưng không vào flow/CSV/JSON và không được manual-assign, scenario v2 chỉ chứa cặp hợp lệ. Hai MP4 fixture + FakeDetector tiếp tục kiểm thử nối phần mềm end-to-end, **không phải AI accuracy**.
+
+Streamlit `AppTest` sau refactor: 6 tab, 0 exception ở trạng thái API chưa kết nối. Không chạy lại YOLO với video công khai trong lần refactor này; số liệu GPU/video ở phần lịch sử bên dưới thuộc commit trước và không được diễn giải là kết quả accuracy của phiên bản mới. Chưa có ground truth clip cửa xe phù hợp: AI MAE/precision/recall = **N/A**. Dashboard chưa được kiểm thử browser E2E sau refactor.
+
+## Kết quả lịch sử ở commit 63379fb (trước refactor; không phải kết quả hiện tại)
+
 Ngày chạy lại: 2026-10-20, Windows, Python 3.11.0.
 
 ## Môi trường

@@ -16,14 +16,14 @@ STOP_NAMES = [
 ]
 
 FLOW_MATRIX = [
-    (4, 0, 1, 0),
-    (3, 1, 0, 2),
-    (2, 0, 1, 3),
-    (5, 1, 0, 2),
-    (1, 2, 1, 4),
-    (2, 0, 0, 3),
-    (1, 1, 2, 3),
-    (0, 2, 1, 8),
+    (4, 0),
+    (3, 2),
+    (2, 3),
+    (5, 2),
+    (1, 4),
+    (2, 3),
+    (1, 3),
+    (0, 8),
 ]
 
 
@@ -162,12 +162,10 @@ def build_scenario(seed: int = 42, kind: str = "normal") -> dict:
         event_time = arrived + timedelta(seconds=4)
         for camera, direction, count in (
             ("front", "IN", flows[0]),
-            ("front", "OUT", flows[1]),
-            ("rear", "IN", flows[2]),
-            ("rear", "OUT", flows[3]),
+            ("rear", "OUT", flows[1]),
         ):
             for number in range(count):
-                uid = f"SIM-{kind}-{stop_index + 1:02d}-{camera}-{direction}-{number + 1:03d}"
+                uid = f"SIM-v2-{kind}-{stop_index + 1:02d}-{camera}-{direction}-{number + 1:03d}"
                 events.append(
                     {
                         "event_uuid": uid,
@@ -187,7 +185,7 @@ def build_scenario(seed: int = 42, kind: str = "normal") -> dict:
 
     events.append(
         {
-            "event_uuid": f"SIM-{kind}-UNASSIGNED-CONTROL",
+            "event_uuid": f"SIM-v2-{kind}-UNASSIGNED-CONTROL",
             "camera": "front",
             "direction": "IN",
             "track_id": "front:sim:unassigned",
@@ -204,15 +202,15 @@ def build_scenario(seed: int = 42, kind: str = "normal") -> dict:
     initial_occupancy = 8 if kind == "normal" else 0
     occupancy = initial_occupancy
     for stop, flows in zip(stops, FLOW_MATRIX, strict=True):
-        total_in, total_out = flows[0] + flows[2], flows[1] + flows[3]
+        total_in, total_out = flows
         occupancy += total_in - total_out
         expected.append(
             {
                 "stop_id": stop["stop_id"],
                 "front_in": flows[0],
-                "front_out": flows[1],
-                "rear_in": flows[2],
-                "rear_out": flows[3],
+                "front_out": 0,
+                "rear_in": 0,
+                "rear_out": flows[1],
                 "total_in": total_in,
                 "total_out": total_out,
                 "onboard_after_stop": occupancy,
@@ -220,7 +218,7 @@ def build_scenario(seed: int = 42, kind: str = "normal") -> dict:
         )
 
     return {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "label": "DỮ LIỆU MÔ PHỎNG / SIMULATED EVENTS",
         "seed": seed,
         "route": {
@@ -232,7 +230,7 @@ def build_scenario(seed: int = 42, kind: str = "normal") -> dict:
             "verified": False,
         },
         "trip": {
-            "trip_id": "SIM-R01-20261019-0800" if kind == "normal" else "SIM-R01-NEGATIVE-CONTROL",
+            "trip_id": "SIM-R01-v2-20261019-0800" if kind == "normal" else "SIM-R01-v2-NEGATIVE-CONTROL",
             "vehicle_id": "SIM-BUS-01",
             "start_time_utc": _iso(start),
             "end_time_utc": _iso(cursor),
@@ -248,7 +246,7 @@ def build_scenario(seed: int = 42, kind: str = "normal") -> dict:
         "ground_truth": {
             "stop_visits": visits_truth,
             "flow": expected,
-            "unassigned_event_uuids": [f"SIM-{kind}-UNASSIGNED-CONTROL"],
+            "unassigned_event_uuids": [f"SIM-v2-{kind}-UNASSIGNED-CONTROL"],
         },
         "disclaimer": "Not real GPS, not AI output, and not a claim about Route 01 operations.",
     }
