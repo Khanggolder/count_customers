@@ -10,7 +10,7 @@ Trên Windows/Python 3.11.0, baseline của commit `d185153385365e59b58f412bb025
 | `ruff check .` | All checks passed |
 | `pip check` | No broken requirements found |
 
-Sau khi bỏ `busreid/occupancy.py` và hai test chỉ dành riêng cho module này (không được runtime gọi), chạy lại cùng lệnh: **48 passed, coverage 88%, Ruff pass, pip check pass**. Các bài test occupancy nghiệp vụ trong scenario/API và flow vẫn giữ nguyên. CI mới được cấu hình trong `.github/workflows/ci.yml`; trạng thái runner GitHub chỉ được xác nhận sau khi workflow chạy trên remote.
+Sau khi bỏ `busreid/occupancy.py` và hai test chỉ dành riêng cho module này (không được runtime gọi), chạy lại cùng lệnh: **48 passed, coverage 88%, Ruff pass, pip check pass**. Các bài test occupancy nghiệp vụ trong scenario/API và flow vẫn giữ nguyên. GitHub Actions Windows/Python 3.11 tại commit `6f4aec9338138760c8282d7bfe2d8752daeba861` đã [hoàn tất success](https://github.com/Khanggolder/count_customers/actions/runs/39624228424): cài dependency, `pip check`, Ruff và pytest đều qua. Đây là kết quả CI của commit được nêu, không phải phép đo AI accuracy.
 
 Smoke cleanup với DB riêng `runs/cleanup_smoke/flow.db` (không động vào DB người dùng): chạy `scripts/run_demo.py` hai lần cho cùng scenario, cả hai trả 8 StopVisit, 44 event và `idempotent=true`. JSON flow có 8 trạm, tổng 18 FRONT-IN / 25 REAR-OUT, occupancy `[12, 13, 12, 15, 12, 11, 9, 1]`. Streamlit `AppTest` render 6 tab, 0 exception khi API không kết nối; đây không phải browser E2E.
 
@@ -27,4 +27,4 @@ Smoke YOLO11n + ByteTrack tại lần phát triển trước đã chạy 30 fram
 - Chưa có ground truth video cửa xe thật: MAE/precision/recall AI = `N/A`.
 - Chưa thử hai camera vật lý cùng xe với GPS/cảm biến cửa đồng bộ, hoặc RTSP soak-test dài hạn.
 - Chưa kiểm thử browser E2E cho thao tác inference dashboard; Streamlit AppTest/smoke trước đó không thay thế được kiểm thử này.
-- GitHub Actions mới: chờ run thực tế trên PR/push, không tuyên bố CI xanh khi chưa có kết quả.
+- Mỗi commit mới cần kiểm tra lại CI riêng; kết quả run trên áp dụng cho `6f4aec9`.
