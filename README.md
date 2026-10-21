@@ -4,9 +4,36 @@ MVP end-to-end đếm khách **lên ở cửa trước (FRONT-IN)** và **xuốn
 
 Demo mặc định chạy offline sau khi cài dependency. Scenario v2 tạo chuyến 8 trạm với GPS/tốc độ/cửa và chỉ có event FRONT-IN, REAR-OUT. Mọi màn hình/API đều gắn nhãn `SIMULATED`; đây là kiểm thử nghiệp vụ, không phải độ chính xác AI.
 
+## Bài toán và phạm vi
+
+Mỗi cửa xe có một camera. YOLO11n phát hiện người, ByteTrack theo dõi và bộ đếm ROI chỉ phát sự kiện khi track đi qua vùng theo chiều hợp lệ. Telemetry GPS/tốc độ/cửa xác định `StopVisit`; sự kiện được gán vào trạm khi có đủ bằng chứng thời gian và nguồn. FastAPI/SQLAlchemy/SQLite lưu và cung cấp dữ liệu, Streamlit hiển thị flow theo chuyến/trạm. Sơ đồ và điều kiện gán chi tiết ở [ARCHITECTURE.md](ARCHITECTURE.md) và [BUSINESS_RULES.md](BUSINESS_RULES.md).
+
+MVP không nhận diện danh tính, Re-ID, dự báo hay điều hành xe. Nó chưa được xác nhận trên hai camera và cảm biến của xe thật; không triển khai công khai trên Internet.
+
+## Cấu trúc chính
+
+| Vị trí | Vai trò |
+| --- | --- |
+| `busreid/` | Namespace kế thừa cho counting, video, telemetry/stop, assignment và scenario; giữ tên để tránh regression trước merge |
+| `backend/` | FastAPI, schema và SQLite |
+| `app/` | Dashboard Streamlit |
+| `configs/` | ROI, camera và detector |
+| `scripts/` | Cài đặt, chạy demo/inference, tải clip hợp lệ, gán nhãn và đánh giá |
+| `tests/` | Unit/API/software integration; MP4 fixture dùng FakeDetector không đo AI accuracy |
+| `docs/archive/` | Tài liệu lịch sử refactor, không phải đặc tả vận hành hiện hành |
+
+`data/raw/`, `data/sample/generated/` và `runs/` chứa dữ liệu/đầu ra local, không commit vào Git.
+
 ## Cài đặt Windows 11
 
-Yêu cầu: Python 3.11, Git; NVIDIA driver mới nếu dùng GPU. Từ thư mục repository:
+Yêu cầu: Windows 11, Python 3.11, Git; NVIDIA driver tương thích nếu dùng GPU. Clone nhánh MVP và vào thư mục repository:
+
+```powershell
+git clone --branch feature/busstop-flow-ai https://github.com/Khanggolder/count_customers.git busstop-flow-ai
+cd busstop-flow-ai
+```
+
+Sau đó cài đặt:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
@@ -19,7 +46,9 @@ Không có NVIDIA hoặc muốn CPU fallback:
 .\scripts\setup_windows.ps1
 ```
 
-Script tạo `.venv`, cài dependency, chạy `pip check` và in trạng thái CUDA. Bản đã kiểm tra trên máy này dùng PyTorch `2.13.0+cu130`; nếu driver khác, chọn wheel phù hợp từ tài liệu PyTorch chính thức.
+Script tạo `.venv`, cài dependency, chạy `pip check` và in trạng thái CUDA. `-Cuda` cài wheel PyTorch CUDA 13.0; chỉ dùng khi driver hỗ trợ. Nếu cài đặt hoặc `torch.cuda.is_available()` lỗi, chạy CPU fallback không có `-Cuda`, hoặc chọn wheel tương thích driver theo [hướng dẫn PyTorch](https://pytorch.org/get-started/locally/) rồi chạy `scripts/check_environment.py`. Không cần GPU để chạy test và demo synthetic.
+
+`requirements.txt` cài project từ `pyproject.toml` cùng công cụ test; hai file có vai trò khác nhau. Model weight và video không được đóng gói trong Git.
 
 ## Demo một lệnh
 
@@ -84,6 +113,8 @@ Mặc định là `UNPAIRED`, event không có telemetry đồng bộ giữ `UNA
 
 Thay path MP4 bằng `rtsp://...`. Mỗi camera có worker, tracker, ROI, clock offset và generation riêng; lỗi một camera không khóa camera còn lại. Không commit URL có credential. URI ghi DB/run summary được redaction, nhưng vẫn nên cấp qua secret local và chỉ bind API vào localhost trong MVP.
 
+RTSP vật lý và telemetry từ xe thật chưa được kiểm thử. Không nhập credential vào issue, PR, log hay file được Git theo dõi.
+
 ## Hiệu chỉnh
 
 Sửa `configs/cameras.yaml` cho từng góc quay:
@@ -125,8 +156,15 @@ Trong cửa sổ nhãn: `I` = IN, `O` = OUT, `Space` = tạm dừng, `Q` = lưu.
 ## Test
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest --cov=busreid --cov=backend
+.\.venv\Scripts\python.exe -m pytest --cov=busreid --cov=backend -W error
 .\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m pip check
 ```
 
-Xem kết quả đo thật trong [TEST_REPORT.md](TEST_REPORT.md), nguồn dữ liệu trong [DATA_SOURCES.md](DATA_SOURCES.md) và giới hạn trong [LIMITATIONS.md](LIMITATIONS.md).
+CI Windows/Python 3.11 chạy các lệnh tương tự, không cần GPU/video/credential. Xem kết quả đo theo commit trong [TEST_REPORT.md](TEST_REPORT.md), nguồn dữ liệu trong [DATA_SOURCES.md](DATA_SOURCES.md), giới hạn trong [LIMITATIONS.md](LIMITATIONS.md) và trạng thái nghiệm thu trong [ACCEPTANCE_CHECKLIST.md](ACCEPTANCE_CHECKLIST.md).
+
+## Dữ liệu cũ và hướng tiếp theo
+
+Schema SQLite của phiên bản BusReID trên `main` **không có migration tự động**. Trước khi chuyển môi trường, sao lưu file DB cũ ở vị trí riêng; không trỏ `BUSSTOP_DATABASE_URL` của bản này vào DB cũ. Tạo DB mới bằng `scripts/run_demo.py` hoặc qua API, chỉ nhập dữ liệu thật sau khi kiểm tra provenance và đồng bộ nguồn. Không xóa DB cũ để lấy chỗ.
+
+Ưu tiên tiếp theo: thu thập hai video camera cửa cùng chuyến với GPS/cửa và nhãn thủ công, hiệu chỉnh ROI/clock, đo accuracy, rồi thử RTSP dài hạn và bảo mật trước pilot. Chưa có license riêng được khai báo cho source repository; thư viện và clip công khai tuân theo license của từng nguồn ghi tại [DATA_SOURCES.md](DATA_SOURCES.md).
