@@ -3,11 +3,12 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "busreid-ai"
-version = "0.1.0"
-description = "MVP đếm hành khách hai cửa và thử nghiệm cross-camera Person Re-ID"
+name = "busstop-flow-ai"
+version = "0.2.0"
+description = "Bus stop passenger flow MVP: YOLO/ByteTrack, stop visits, telemetry, API and dashboard"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+  "anyio==4.8.0",
   "fastapi==0.115.6",
   "uvicorn[standard]==0.34.0",
   "sqlalchemy==2.0.36",
@@ -16,11 +17,11 @@ dependencies = [
   "numpy==1.26.4",
   "opencv-python==4.10.0.84",
   "PyYAML==6.0.2",
-  "scipy==1.14.1",
   "Pillow==11.0.0",
   "requests==2.32.3",
   "streamlit==1.41.1",
   "pandas==2.2.3",
+  "pyarrow==18.1.0",
   "plotly==5.24.1",
   "ultralytics==8.3.57",
   "lap==0.5.13",
@@ -28,13 +29,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest==8.3.4", "pytest-cov==6.0.0", "httpx==0.28.1", "ruff==0.8.4"]
-reid = [
-  "Cython==3.1.4",
-  "gdown==5.2.0",
-  "yacs==0.1.8",
-  "tensorboard==2.20.0",
-  "chardet==5.2.0",
-]
+
+[project.scripts]
+busstop-demo = "busreid.cli:demo_main"
 
 [tool.setuptools.packages.find]
 include = ["busreid*", "backend*", "app*"]
@@ -42,10 +39,12 @@ include = ["busreid*", "backend*", "app*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --disable-warnings"
+markers = ["network: needs internet", "gpu: needs CUDA", "integration: external integration"]
 
 [tool.ruff]
-line-length = 100
+line-length = 110
 target-version = "py311"
+exclude = [".venv"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]
@@ -53,4 +52,3 @@ ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "backend/main.py" = ["B008"]
-

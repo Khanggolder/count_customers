@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from busreid.counting import DirectionCounter
 from busreid.types import Detection, Direction
 
@@ -13,7 +15,11 @@ def det(track: str, y: int) -> Detection:
 
 
 def feed(counter: DirectionCounter, track: str, ys: list[int]) -> list:
-    return [event for index, y in enumerate(ys) if (event := counter.update(det(track, y), SHAPE, index, index / 10))]
+    return [
+        event
+        for index, y in enumerate(ys)
+        if (event := counter.update(det(track, y), SHAPE, index, index / 10))
+    ]
 
 
 def test_outside_to_inside_counted_once() -> None:
@@ -28,10 +34,33 @@ def test_standing_at_threshold_is_not_counted() -> None:
     assert feed(counter, "front:track00001", [50] * 20) == []
 
 
-def test_reverse_direction_emits_out() -> None:
+def test_front_reverse_direction_does_not_emit_out() -> None:
     counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 2, 2)
     events = feed(counter, "front:track00001", [80, 80, 50, 50, 20, 20])
-    assert [event.direction for event in events] == [Direction.OUT]
+    assert events == []
+
+
+def test_rear_reverse_direction_does_not_emit_in() -> None:
+    counter = DirectionCounter("rear", ZONE_A, ZONE_B, Direction.OUT, 2, 2)
+    assert feed(counter, "rear:track00001", [80, 80, 50, 50, 20, 20]) == []
+
+
+def test_counter_rejects_wrong_camera_policy() -> None:
+    with pytest.raises(ValueError, match="accepts only IN"):
+        DirectionCounter("front", ZONE_A, ZONE_B, Direction.OUT)
+    with pytest.raises(ValueError, match="accepts only OUT"):
+        DirectionCounter("rear", ZONE_A, ZONE_B, Direction.IN)
+
+
+def test_reverse_then_forward_does_not_consume_cooldown() -> None:
+    counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 1, 20)
+    events = feed(counter, "front:track00001", [80, 20, 80])
+    assert [event.direction for event in events] == [Direction.IN]
+
+
+def test_approach_then_turn_back_is_not_counted() -> None:
+    counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 2, 5)
+    assert feed(counter, "front:track00001", [20, 20, 50, 50, 20, 20]) == []
 
 
 def test_oscillation_debounced() -> None:
@@ -65,3 +94,17 @@ def test_lost_track_does_not_create_false_crossing() -> None:
     counter.prune(set())
     assert counter.update(det("front:new", 80), SHAPE, 10, 1) is None
 
+
+def test_state_ttl_cleanup_is_bounded() -> None:
+    counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 1, 1, state_ttl_frames=3)
+    counter.update(det("front:old", 20), SHAPE, 1, 0.1)
+    counter.prune_stale(5)
+    assert counter.states == {}
+
+
+def test_unique_nearby_id_switch_keeps_crossing_state() -> None:
+    counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 1, 1, id_switch_max_distance=0.7)
+    assert counter.update(det("front:old", 20), SHAPE, 0, 0.0) is None
+    event = counter.update(det("front:new", 80), SHAPE, 1, 0.1)
+    assert event is not None
+    assert event.direction == Direction.IN

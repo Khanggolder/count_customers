@@ -1,65 +1,30 @@
-# Báo cáo kiểm thử thực tế
+# Báo cáo kiểm thử BusStop Flow AI
 
-Ngày chạy: 2026-10-17, Windows, Python 3.11.0, NVIDIA GeForce RTX 3050 Laptop GPU 4 GB, driver 610.78.
+## Cleanup trước merge — 2026-10-21
 
-## Môi trường
+Trên Windows/Python 3.11.0, baseline của commit `d185153385365e59b58f412bb0256371ce3b1806` trước cleanup:
 
-- PyTorch `2.14.1+cu130`, CUDA runtime 13.0, `torch.cuda.is_available() == True`.
-- Ultralytics `8.3.57`, OpenCV `4.10.0.84`, torchreid `1.4.0` từ commit official `f8cd150...`.
-- FFmpeg/ffprobe CLI: không cài. OpenCV decode/encode MP4 đã test pass.
+| Kiểm tra | Kết quả baseline |
+| --- | --- |
+| `pytest --cov=busreid --cov=backend -W error` | 50 passed, coverage 88% |
+| `ruff check .` | All checks passed |
+| `pip check` | No broken requirements found |
 
-## Automated tests
+Sau khi bỏ `busreid/occupancy.py` và hai test chỉ dành riêng cho module này (không được runtime gọi), chạy lại cùng lệnh: **48 passed, coverage 88%, Ruff pass, pip check pass**. Các bài test occupancy nghiệp vụ trong scenario/API và flow vẫn giữ nguyên. GitHub Actions Windows/Python 3.11 tại commit `6f4aec9338138760c8282d7bfe2d8752daeba861` đã [hoàn tất success](https://github.com/Khanggolder/count_customers/actions/runs/39624228424): cài dependency, `pip check`, Ruff và pytest đều qua. Đây là kết quả CI của commit được nêu, không phải phép đo AI accuracy.
 
-Lệnh:
+Smoke cleanup với DB riêng `runs/cleanup_smoke/flow.db` (không động vào DB người dùng): chạy `scripts/run_demo.py` hai lần cho cùng scenario, cả hai trả 8 StopVisit, 44 event và `idempotent=true`. JSON flow có 8 trạm, tổng 18 FRONT-IN / 25 REAR-OUT, occupancy `[12, 13, 12, 15, 12, 11, 9, 1]`. Streamlit `AppTest` render 6 tab, 0 exception khi API không kết nối; đây không phải browser E2E.
 
-```text
-.\.venv\Scripts\python.exe -m pytest --cov=busreid --cov=backend --cov-report=term-missing
-```
+Test hồi quy bao gồm FRONT-IN/REAR-OUT, reverse crossing không phát event, không đếm trùng, StopVisit cần GPS/tốc độ/cửa, loại dừng giả do kẹt xe/đèn đỏ, provenance synthetic/real, assignment và review, replay idempotent, API validation/export, RTSP reconnect/timebase qua fake capture. Integration test hai MP4 fixture dùng **FakeDetector** để kiểm thử luồng phần mềm từ event đến flow theo trạm; đây **không phải** phép đo AI accuracy.
 
-Kết quả cuối: **24 passed**, 1 warning, 4,21 giây; combined statement coverage **83%**. Test gồm crossing state machine, đứng ngưỡng, đảo hướng, debounce, multi-person, namespace camera, track mất; matching threshold/time/one-to-one/ambiguity/UNKNOWN; occupancy âm/unpaired; quality crop; MP4 decode; parser PCDS (gồm format per-clip chính thức); API/SQLite/export; pipeline video với fixture mang nhãn synthetic.
+## Demo và inference đã đo ở lần phát triển trước
 
-Lệnh lint:
+Tại commit `d185153` (trước cleanup này), demo synthetic schema v2 đã chạy trên SQLite mặc định: trip `SIM-R01-v2-20261019-0800`, 8 StopVisit, 44 event synthetic (43 gán trạm, 1 `UNASSIGNED`). Cleanup xác nhận lại cùng kết quả trên DB riêng như trên. Kịch bản âm được tách riêng. Đây là dữ liệu mô phỏng deterministic, không phải dự đoán YOLO.
 
-```text
-.\.venv\Scripts\python.exe -m ruff check .
-```
+Smoke YOLO11n + ByteTrack tại lần phát triển trước đã chạy 30 frame clip Pexels 31337217 trên RTX 3050: 3.1434 processing FPS, 0 crossing với ROI mặc định. Lần chạy toàn clip 178 frame đạt 6.0114 processing FPS, cũng 0 crossing. Clip quay từ ngoài xe, không phải camera cố định tại cửa và không có telemetry đồng bộ. Kết quả không gán trạm; 0 crossing **không** chứng minh accuracy. Không chạy lại inference GPU trong cleanup này.
 
-Kết quả: **All checks passed**.
+## Chưa kiểm chứng
 
-Evaluator CLI cũng chạy pass với GT fixture mang nhãn `SYNTHETIC_EVALUATOR_SMOKE` (1 cặp direction, MAE 0.0). Con số này chỉ kiểm tra phép tính/định dạng, không phải metric dataset thật; PCDS MAE vẫn `NA`.
-
-## Inference thật — clip cửa trước GitHub
-
-Output: `runs/github_bus_e2e/` và SQLite session `1`.
-
-- Input: 900×474, 25 FPS, 281 frame, 11,24 giây.
-- YOLO11n + ByteTrack + counter, RTX 3050: **41,21 processing FPS**.
-- Peak tensor VRAM: **69,21 MiB**.
-- Prediction: **1 IN, 0 OUT**; event `front:track00015`, frame `233`, timestamp `9,32 s`, detector confidence `0,698`.
-- Event/crop không hardcode; sinh từ pipeline thật. Không báo accuracy do video không có GT.
-- Annotated MP4: `runs/github_bus_e2e/front_annotated.mp4`.
-- Event CSV: `runs/github_bus_e2e/front_events.csv`.
-
-## Hai pipeline thật, nguồn UNPAIRED
-
-Output: `runs/two_camera_unpaired/`, SQLite session `2`.
-
-- FRONT clip GitHub: 281 frame, 1 event, 43,52 FPS, peak 69,21 MiB.
-- REAR dùng clip Pexels khác nguồn: 178 frame 4K, 0 event, 8,02 FPS, peak 80,04 MiB.
-- Mode: `UNPAIRED`; occupancy `N/A`; không confirmed identity. Đây chỉ chứng minh hai detector/tracker/counter namespace độc lập, không mô phỏng hai camera cùng chuyến.
-
-## Re-ID thật
-
-- Checkpoint OSNet x0.25 MSMT17 chính thức load thành công; classifier train-time bị bỏ do shape khác, backbone weights được load.
-- Crop thật từ event frame 233 → embedding 512-D, L2 norm 1.0 trên CUDA.
-- 50 lượt encode batch=1: **58,07 ảnh/giây**, peak tensor VRAM **12,36 MiB**.
-- Similarity crop với bản flip trong CPU smoke trước đó: `0,9840`; đây chỉ là invariance smoke test, **không phải accuracy**.
-- `run_reid --session 2 --mode bus-unpaired` trả `[]` vì không có event OUT; hệ thống không bịa candidate.
-
-## API/UI smoke
-
-- Uvicorn khởi động thành công; `/health`, `/device`, `/sessions`, `/sessions/1/stats`, `/sessions/1/events`, `/sessions/1/export?format=csv` đều trả HTTP 200.
-- Session 1 API: IN=1, OUT=0, occupancy=`null`, warning=`UNPAIRED`.
-- CSV export 170 bytes chứa đúng một event thật, `synthetic=False`.
-- Streamlit khởi động tại port 8501; `/` HTTP 200 và `/_stcore/health` trả `ok`.
-
+- Chưa có ground truth video cửa xe thật: MAE/precision/recall AI = `N/A`.
+- Chưa thử hai camera vật lý cùng xe với GPS/cảm biến cửa đồng bộ, hoặc RTSP soak-test dài hạn.
+- Chưa kiểm thử browser E2E cho thao tác inference dashboard; Streamlit AppTest/smoke trước đó không thay thế được kiểm thử này.
+- Mỗi commit mới cần kiểm tra lại CI riêng; kết quả run trên áp dụng cho `6f4aec9`.

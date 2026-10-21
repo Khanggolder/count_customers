@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from .business import validate_passenger_direction
 from .types import Direction
 
 
@@ -18,6 +19,9 @@ class CameraConfig:
     zone_b: list[tuple[float, float]]
     min_stable_frames: int = 2
     debounce_frames: int = 12
+    state_ttl_frames: int = 90
+    anchor_mode: str = "bottom_center"
+    time_offset_ms: int = 0
 
 
 @dataclass(slots=True)
@@ -30,19 +34,9 @@ class DetectorConfig:
 
 
 @dataclass(slots=True)
-class ReIDConfig:
-    model: str = "osnet_x0_25"
-    checkpoint: str = "models/osnet_x0_25_msmt17.pt"
-    threshold: float = 0.72
-    ambiguity_margin: float = 0.05
-    max_candidates: int = 100
-
-
-@dataclass(slots=True)
 class AppConfig:
     database_url: str
     detector: DetectorConfig
-    reid: ReIDConfig
     cameras: dict[str, CameraConfig]
 
 
@@ -60,6 +54,9 @@ def load_config(path: str | Path = "configs/cameras.yaml") -> AppConfig:
         raw = yaml.safe_load(handle)
     cameras: dict[str, CameraConfig] = {}
     for name, value in raw["cameras"].items():
+        if value["role"].upper() != name.upper():
+            raise ValueError(f"Camera {name} role must match its FRONT/REAR identity")
+        validate_passenger_direction(name, value["event_direction"])
         cameras[name] = CameraConfig(
             name=name,
             role=value["role"],
@@ -69,11 +66,12 @@ def load_config(path: str | Path = "configs/cameras.yaml") -> AppConfig:
             zone_b=_polygon(value["zone_b"]),
             min_stable_frames=int(value.get("min_stable_frames", 2)),
             debounce_frames=int(value.get("debounce_frames", 12)),
+            state_ttl_frames=int(value.get("state_ttl_frames", 90)),
+            anchor_mode=value.get("anchor_mode", "bottom_center"),
+            time_offset_ms=int(value.get("time_offset_ms", 0)),
         )
     return AppConfig(
-        database_url=raw.get("database_url", "sqlite:///data/busreid.db"),
+        database_url=raw.get("database_url", "sqlite:///data/busstop_flow.db"),
         detector=DetectorConfig(**raw.get("detector", {})),
-        reid=ReIDConfig(**raw.get("reid", {})),
         cameras=cameras,
     )
-

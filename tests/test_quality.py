@@ -15,4 +15,3 @@ def test_quality_keeps_only_best_crops() -> None:
     crops = selector.best("front:t1")
     assert len(crops) == 2
     assert crops[0].quality >= crops[1].quality
-

@@ -15,18 +15,14 @@ sys.path.insert(0, str(ROOT))
 from busreid.video import probe_video  # noqa: E402
 
 SOURCES = {
-    "github-bus-counter": {
-        "url": "https://raw.githubusercontent.com/sanjarbek1030/BusOccupancyCounter/main/bus_input.mp4",
-        "filename": "bus_occupancy_counter_input.mp4",
-        "page": "https://github.com/sanjarbek1030/BusOccupancyCounter",
-        "license_note": "Repository README states MIT, but the clip visibly contains a Shutterstock watermark; separate video rights are unconfirmed. Internal research verification only, not public redistribution.",
-    },
     "pexels-bus-boarding": {
         "url": "https://videos.pexels.com/video-files/31337217/13375520_3840_2160_30fps.mp4",
         "filename": "pexels_bus_boarding_31337217.mp4",
         "page": "https://www.pexels.com/video/busy-city-bus-stop-with-passengers-boarding-31337217/",
-        "license_note": "Pexels page marks the clip Free to use under the Pexels License; attribution retained in DATA_SOURCES.md.",
-    },
+        "license_url": "https://www.pexels.com/license/",
+        "license_note": "Pexels License: free to use; source and author Shariar Tawsif retained.",
+        "technical_suitability": "Detector/tracker smoke only: exterior moving view, not fixed onboard doorway camera, no count GT.",
+    }
 }
 
 
@@ -38,56 +34,51 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def download(url: str, destination: Path, retries: int = 3, timeout: int = 30) -> None:
+def download(url: str, destination: Path, retries: int = 3, timeout: int = 60) -> None:
     temporary = destination.with_suffix(destination.suffix + ".part")
     for attempt in range(1, retries + 1):
         try:
-            request = Request(url, headers={"User-Agent": "BusReID-AI/0.1 research MVP"})
+            request = Request(url, headers={"User-Agent": "BusStop-Flow-AI/0.2 research MVP"})
             with urlopen(request, timeout=timeout) as response, temporary.open("wb") as output:
-                total = int(response.headers.get("Content-Length", 0))
-                downloaded = 0
                 while block := response.read(1024 * 1024):
                     output.write(block)
-                    downloaded += len(block)
-                    if total:
-                        print(f"\r{downloaded / total:6.1%} ({downloaded / 1_048_576:.1f} MiB)", end="")
-            print()
             temporary.replace(destination)
             return
         except (HTTPError, URLError, TimeoutError, OSError) as exc:
             temporary.unlink(missing_ok=True)
             if attempt == retries:
-                raise RuntimeError(f"Tải thất bại sau {retries} lần: {exc}") from exc
+                raise RuntimeError(f"Download failed after {retries} attempts: {exc}") from exc
             time.sleep(attempt)
 
 
 def main() -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", choices=SOURCES, required=True)
     parser.add_argument("--output", type=Path, default=ROOT / "data" / "raw")
-    parser.add_argument("--yes", action="store_true", help="Xác nhận tải asset công khai")
+    parser.add_argument("--yes", action="store_true", help="Confirm download of the public asset")
     args = parser.parse_args()
     info = SOURCES[args.source]
     args.output.mkdir(parents=True, exist_ok=True)
-    destination = args.output / str(info["filename"])
+    destination = args.output / info["filename"]
     if not args.yes:
-        print(f"Sẽ tải {info['url']} vào {destination}. Thêm --yes để xác nhận.")
+        print(f"Will download {info['page']} to {destination}. Add --yes to continue.")
         return 2
-    download(str(info["url"]), destination)
+    if not destination.is_file():
+        download(info["url"], destination)
     metadata = probe_video(destination)
-    if metadata.frame_count is None or metadata.frame_count < 2 or metadata.width < 64 or metadata.height < 64:
+    if not metadata.frame_count or metadata.frame_count < 2 or metadata.width < 64 or metadata.height < 64:
         destination.unlink(missing_ok=True)
-        raise RuntimeError("Tệp tải xuống không decode thành video hợp lệ")
+        raise RuntimeError("Downloaded file is not a decodable video")
     manifest = {
         "source_id": args.source,
-        "file": str(destination),
+        "file": str(destination.relative_to(ROOT)),
         "sha256": sha256(destination),
         "bytes": destination.stat().st_size,
         "metadata": {key: getattr(metadata, key) for key in metadata.__slots__},
         "source_page": info["page"],
+        "license_url": info["license_url"],
         "license_note": info["license_note"],
+        "technical_suitability": info["technical_suitability"],
         "content_review": "PENDING_MANUAL_FRAME_REVIEW",
     }
     manifest_path = destination.with_suffix(".source.json")
@@ -98,4 +89,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

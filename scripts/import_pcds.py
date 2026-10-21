@@ -53,8 +53,14 @@ def scan(root: Path) -> list[dict[str, object]]:
     for label in root.rglob("label.txt"):
         folder = label.parent
         lowered = folder.name.lower()
-        camera = "front" if "front" in lowered else ("back" if "back" in lowered or "rear" in lowered else "unknown")
-        videos = sorted(path for path in folder.rglob("*") if path.suffix.lower() in {".avi", ".mp4", ".mkv", ".mov"})
+        camera = (
+            "front"
+            if "front" in lowered
+            else ("back" if "back" in lowered or "rear" in lowered else "unknown")
+        )
+        videos = sorted(
+            path for path in folder.rglob("*") if path.suffix.lower() in {".avi", ".mp4", ".mkv", ".mov"}
+        )
         detailed = parse_pcds_rows(label)
         if detailed:
             by_name = {path.name.lower(): path for path in videos}
@@ -74,7 +80,18 @@ def scan(root: Path) -> list[dict[str, object]]:
                 )
         else:
             entering, exiting = parse_label(label)
-            rows.append({"clip": folder.name, "clip_dir": str(folder), "camera": camera, "entering_gt": entering, "exiting_gt": exiting, "video_type": None, "label_file": str(label), "video_files": "|".join(str(path) for path in videos)})
+            rows.append(
+                {
+                    "clip": folder.name,
+                    "clip_dir": str(folder),
+                    "camera": camera,
+                    "entering_gt": entering,
+                    "exiting_gt": exiting,
+                    "video_type": None,
+                    "label_file": str(label),
+                    "video_files": "|".join(str(path) for path in videos),
+                }
+            )
     return rows
 
 
@@ -93,7 +110,7 @@ def main() -> int:
     if args.input.is_file():
         if not zipfile.is_zipfile(args.input):
             raise ValueError("Input file phải là ZIP hợp lệ")
-        temp = tempfile.TemporaryDirectory(prefix="busreid_pcds_")
+        temp = tempfile.TemporaryDirectory(prefix="busstop_flow_pcds_")
         root = Path(temp.name)
         with zipfile.ZipFile(args.input) as archive:
             for item in archive.infolist():
@@ -105,7 +122,19 @@ def main() -> int:
         rows = scan(root)
         manifest = args.output / "pcds_manifest.csv"
         with manifest.open("w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(handle, fieldnames=["clip", "clip_dir", "camera", "entering_gt", "exiting_gt", "video_type", "label_file", "video_files"])
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=[
+                    "clip",
+                    "clip_dir",
+                    "camera",
+                    "entering_gt",
+                    "exiting_gt",
+                    "video_type",
+                    "label_file",
+                    "video_files",
+                ],
+            )
             writer.writeheader()
             writer.writerows(rows)
         print(f"Đã lập manifest {len(rows)} clip: {manifest}")
@@ -117,4 +146,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

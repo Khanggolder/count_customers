@@ -1,130 +1,170 @@
-# BusReID AI
+# BusStop Flow AI
 
-MVP end-to-end đếm hành khách lên ở cửa trước, xuống ở cửa sau bằng hai pipeline camera độc lập; lưu sự kiện vào SQLite; cung cấp REST API, dashboard tiếng Việt và Person Re-ID thử nghiệm với cơ chế `UNKNOWN`.
+MVP end-to-end đếm khách **lên ở cửa trước (FRONT-IN)** và **xuống ở cửa sau (REAR-OUT)**, rồi tổng hợp theo từng lần xe phục vụ trạm. Đây là giả định vận hành bắt buộc; đơn vị vận tải phải duy trì quy tắc một chiều này khi triển khai. Hệ thống giữ YOLO11n, ByteTrack, MP4/RTSP, FastAPI, SQLite và Streamlit; không có Person Re-ID.
 
-> Không nhận diện danh tính thật. Re-ID chỉ tạo mã hành khách tạm trong session. Với hai video không có identity ground truth, kết quả luôn là `UNVERIFIED` hoặc `UNKNOWN`, không được diễn giải là độ chính xác nhận dạng trên xe buýt.
+Demo mặc định chạy offline sau khi cài dependency. Scenario v2 tạo chuyến 8 trạm với GPS/tốc độ/cửa và chỉ có event FRONT-IN, REAR-OUT. Mọi màn hình/API đều gắn nhãn `SIMULATED`; đây là kiểm thử nghiệp vụ, không phải độ chính xác AI.
 
-## Chức năng đã triển khai
+## Bài toán và phạm vi
 
-- `VideoSource` chung cho MP4, webcam index và RTSP; RTSP có timeout/reconnect và che credential trong log.
-- YOLO11n class `person` + ByteTrack; mỗi camera có model/tracker namespace riêng (`front:*`, `rear:*`).
-- Counter A→B/B→A bằng bottom-center, stable-frame, hysteresis qua vùng trung gian và debounce.
-- Crop selector theo kích thước/độ nét; lưu crop tại crossing.
-- OSNet x0.25 checkpoint MSMT17 thật, batch embedding 512-D và L2 normalization.
-- Hungarian one-to-one, time constraint `OUT > IN`, ambiguity margin, reject threshold, `UNKNOWN`, `UNVERIFIED`, human review.
-- Session/event/source/match/calibration/evaluation models trong SQLite; CSV/JSON export.
-- FastAPI + Swagger và Streamlit dashboard tiếng Việt.
-- Parser ZIP/folder PCDS, count evaluation và scripts tải asset/model có checksum.
+Mỗi cửa xe có một camera. YOLO11n phát hiện người, ByteTrack theo dõi và bộ đếm ROI chỉ phát sự kiện khi track đi qua vùng theo chiều hợp lệ. Telemetry GPS/tốc độ/cửa xác định `StopVisit`; sự kiện được gán vào trạm khi có đủ bằng chứng thời gian và nguồn. FastAPI/SQLAlchemy/SQLite lưu và cung cấp dữ liệu, Streamlit hiển thị flow theo chuyến/trạm. Sơ đồ và điều kiện gán chi tiết ở [ARCHITECTURE.md](ARCHITECTURE.md) và [BUSINESS_RULES.md](BUSINESS_RULES.md).
 
-## Cài đặt Windows 10/11
+MVP không nhận diện danh tính, Re-ID, dự báo hay điều hành xe. Nó chưa được xác nhận trên hai camera và cảm biến của xe thật; không triển khai công khai trên Internet.
 
-Yêu cầu: Python 3.11, driver NVIDIA mới nếu dùng GPU. FFmpeg CLI là tùy chọn; OpenCV wheel đã đọc/ghi MP4 trực tiếp.
+## Cấu trúc chính
+
+| Vị trí | Vai trò |
+| --- | --- |
+| `busreid/` | Namespace kế thừa cho counting, video, telemetry/stop, assignment và scenario; giữ tên để tránh regression trước merge |
+| `backend/` | FastAPI, schema và SQLite |
+| `app/` | Dashboard Streamlit |
+| `configs/` | ROI, camera và detector |
+| `scripts/` | Cài đặt, chạy demo/inference, tải clip hợp lệ, gán nhãn và đánh giá |
+| `tests/` | Unit/API/software integration; MP4 fixture dùng FakeDetector không đo AI accuracy |
+| `docs/archive/` | Tài liệu lịch sử refactor, không phải đặc tả vận hành hiện hành |
+
+`data/raw/`, `data/sample/generated/` và `runs/` chứa dữ liệu/đầu ra local, không commit vào Git.
+
+## Cài đặt Windows 11
+
+Yêu cầu: Windows 11, Python 3.11, Git; NVIDIA driver tương thích nếu dùng GPU. Clone nhánh MVP và vào thư mục repository:
 
 ```powershell
-Set-Location C:\Users\ad\Downloads\codepython\count_customers
+git clone --branch feature/busstop-flow-ai https://github.com/Khanggolder/count_customers.git busstop-flow-ai
+cd busstop-flow-ai
+```
+
+Sau đó cài đặt:
+
+```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\setup_windows.ps1 -Cuda
-.\.venv\Scripts\python.exe scripts\check_environment.py
 ```
 
-`-Cuda` cài wheel PyTorch CUDA 13.0 chính thức. Nếu driver/GPU không phù hợp, bỏ cờ để chạy CPU. Lần đầu có thể cần khoảng 2 GB tải xuống.
+Không có NVIDIA hoặc muốn CPU fallback:
 
-Linux/CPU:
-
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python -m pip install Cython==3.1.4 gdown==5.2.0 yacs==0.1.8 tensorboard==2.20.0 chardet==5.2.0
-python -m pip install --no-build-isolation -r requirements-reid.txt
+```powershell
+.\scripts\setup_windows.ps1
 ```
 
-## Tải asset hợp lệ
+Script tạo `.venv`, cài dependency, chạy `pip check` và in trạng thái CUDA. `-Cuda` cài wheel PyTorch CUDA 13.0; chỉ dùng khi driver hỗ trợ. Nếu cài đặt hoặc `torch.cuda.is_available()` lỗi, chạy CPU fallback không có `-Cuda`, hoặc chọn wheel tương thích driver theo [hướng dẫn PyTorch](https://pytorch.org/get-started/locally/) rồi chạy `scripts/check_environment.py`. Không cần GPU để chạy test và demo synthetic.
+
+`requirements.txt` cài project từ `pyproject.toml` cùng công cụ test; hai file có vai trò khác nhau. Model weight và video không được đóng gói trong Git.
+
+## Demo một lệnh
+
+```powershell
+.\scripts\run_demo.ps1
+```
+
+Hoặc CLI tương đương:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_demo.py
+```
+
+Kết quả:
+
+- `data/sample/generated/scenario.json`: scenario và ground truth synthetic tách riêng.
+- `data/busstop_flow.db`: SQLite chứa route, trip, telemetry, StopVisit, event và audit.
+- `runs/demo/flow_by_stop.json`: tổng hợp 8 trạm.
+
+Chạy API và dashboard trong hai PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
+```
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app\dashboard.py
+```
+
+Mở dashboard tại <http://localhost:8501> và Swagger tại <http://localhost:8000/docs>.
+
+## Chạy video thật
+
+Tải clip Pexels đã xác minh license (không commit video vào Git):
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\fetch_demo_assets.py --source pexels-bus-boarding --yes
-.\.venv\Scripts\python.exe scripts\fetch_demo_assets.py --source github-bus-counter --yes
-.\.venv\Scripts\python.exe scripts\fetch_reid_model.py --yes
 ```
 
-Pexels có license rõ nhưng camera ngoài xe di chuyển, chỉ phù hợp detector/tracker smoke test. Clip GitHub có góc tĩnh phù hợp counting hơn nhưng mang watermark Shutterstock và quyền video riêng chưa rõ, chỉ dùng kiểm chứng nội bộ. Xem [DATA_SOURCES.md](DATA_SOURCES.md).
-
-PCDS phải tải hợp lệ từ nguồn tác giả (BaiYun key `2s31`), sau đó:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\import_pcds.py --input D:\datasets\PCDS.zip --output data\processed
-```
-
-## Chạy inference
-
-Single camera (occupancy luôn `N/A`):
+Chạy một camera. Chỉ truyền `--recording-start-time` khi biết thời điểm capture thật:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_count.py `
-  --front data\raw\bus_occupancy_counter_input.mp4 `
+  --front data\raw\pexels_bus_boarding_31337217.mp4 `
   --config configs\cameras.yaml `
-  --output runs\front_demo
+  --output runs\pexels_real_video `
+  --trip-id PEXELS-31337217
 ```
 
-Hai camera độc lập:
+Hai file/camera chạy đồng thời bằng hai worker:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_count.py `
   --front D:\video\front.mp4 --rear D:\video\rear.mp4 `
-  --config configs\cameras.yaml --output runs\trip01
+  --recording-start-time 2026-10-19T08:00:00+07:00 `
+  --output runs\trip-real --trip-id TRIP-REAL-001
 ```
 
-Mặc định hai nguồn là `UNPAIRED`. Chỉ thêm `--paired` khi chắc chắn chúng là hai camera cùng chuyến/timeline; nếu không, occupancy và confirmed identity bị vô hiệu.
+Mặc định là `UNPAIRED`, event không có telemetry đồng bộ giữ `UNASSIGNED`, occupancy là `N/A`. Chỉ dùng `--paired-verified` khi hai camera thật sự cùng chuyến, đủ coverage và đã hiệu chỉnh clock; cờ này vẫn không tự bịa StopVisit.
 
-Mỗi run tạo annotated MP4, crops, event CSV, summary JSON và một session SQLite. ROI A/B dùng tọa độ normalized trong `configs/cameras.yaml`; phải hiệu chỉnh theo từng camera.
+## RTSP
 
-## Chạy API và dashboard
+Thay path MP4 bằng `rtsp://...`. Mỗi camera có worker, tracker, ROI, clock offset và generation riêng; lỗi một camera không khóa camera còn lại. Không commit URL có credential. URI ghi DB/run summary được redaction, nhưng vẫn nên cấp qua secret local và chỉ bind API vào localhost trong MVP.
 
-Mở hai PowerShell:
+RTSP vật lý và telemetry từ xe thật chưa được kiểm thử. Không nhập credential vào issue, PR, log hay file được Git theo dõi.
+
+## Hiệu chỉnh
+
+Sửa `configs/cameras.yaml` cho từng góc quay:
+
+- `zone_a`, `zone_b`: polygon normalized; A→B là chiều hợp lệ của từng camera (FRONT-IN, REAR-OUT). B→A bị bỏ khỏi PassengerEvent và không chiếm cooldown. Cấu hình sai camera/hướng bị từ chối.
+- `anchor_mode`: `bottom_center` hoặc `center`.
+- `min_stable_frames`, `debounce_frames`, `state_ttl_frames`: chống rung/trùng và giới hạn bộ nhớ state.
+- `time_offset_ms`: offset clock riêng camera.
+
+Ngưỡng stop mặc định trong `StopVisitDetector` (`speed<=3 km/h`, radius theo stop, dwell 3 giây) là giá trị nghiên cứu, không phải tiêu chuẩn khai thác.
+
+## End-to-end trên trip hiện có
+
+Tạo trip thật qua `POST /trips` với một route/stop đã có; không dùng trip `SIMULATED`. Cung cấp hai MP4/RTSP của **cùng xe/chuyến**, thời điểm bắt đầu capture có timezone và telemetry JSON gồm các mẫu `event_time_utc`, `latitude`, `longitude`, `speed_kmh`, `door_front`, `door_rear`, `source` (`SENSOR`/`CSV`/`JSON`, không phải `SIMULATED`). Đồng hồ video/telemetry phải được kiểm chứng độc lập. Ví dụ:
 
 ```powershell
-# Terminal 1
-.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
-
-# Terminal 2
-.\.venv\Scripts\python.exe -m streamlit run app\dashboard.py
+.\.venv\Scripts\python.exe scripts\run_count.py `
+  --trip-id TRIP-REAL-001 --front D:\video\front.mp4 --rear D:\video\rear.mp4 `
+  --recording-start-time 2026-10-20T08:00:00+07:00 `
+  --telemetry-json D:\telemetry\trip-001.json --telemetry-synchronized `
+  --output runs\trip-001
 ```
 
-- Dashboard: <http://localhost:8501>
-- Swagger: <http://localhost:8000/docs>
+Lệnh dùng trip hiện có, tạo/kiểm tra `CameraSource`, chạy hai pipeline, nhập telemetry idempotent, phát hiện StopVisit, gán event và ghi `run_summary.json` + video annotated. `--telemetry-synchronized` là lời xác nhận của người vận hành, **không** phải thuật toán tự chứng minh đồng bộ. Event chỉ `AUTO_ASSIGNED` khi nguồn thuộc đúng trip/cửa, capture clock có neo thời gian, StopVisit confirmed và mẫu cửa tương ứng đang mở trong 2 giây trước event. Thiếu bằng chứng cửa thành `REVIEW_REQUIRED`; thiếu GPS/telemetry cùng nguồn hoặc không xác nhận đồng bộ thì `UNASSIGNED`. Public Pexels không có GPS cùng nguồn nên vẫn `UNASSIGNED`. Không dùng `--paired-verified` để ngụ ý coverage đầy đủ nếu chưa kiểm chứng; occupancy thật vẫn `N/A` khi `coverage_complete=false`.
 
-Dashboard cho upload/path/RTSP, cấu hình ROI, chạy batch thật, xem annotated video/KPI, event, export và review Re-ID. `NO_VIDEO`, `NO_SOURCE` và `UNPAIRED` được hiển thị rõ.
+Dashboard tab **Hai cửa** cho chọn trip thật, FRONT/REAR, telemetry, capture start, xem progress theo frame và video annotated sau khi xong. Đây là subprocess cục bộ Windows; không dùng làm dịch vụ inference nhiều người dùng. Các endpoint `/runs` hiện chỉ lưu metadata, chưa phải job queue chạy inference. `runs/` và video không được commit.
 
-## Re-ID
+Demo chính: `POST /demo/generate` có 8 trạm, 44 event synthetic (43 gán trạm, 1 UNASSIGNED), 18 khách lên/25 khách xuống, occupancy ban đầu 8 và cuối chuyến 1. Đối chứng lỗi riêng: `POST /demo/generate?kind=negative_occupancy`, occupancy ban đầu 0 và có cảnh báo âm. Cả hai đều không phải AI output. Schema v2 dùng trip ID `SIM-R01-v2-20261019-0800`; dữ liệu scenario v1 trong SQLite không bị xóa, replay v1 bị từ chối. Flow/export mới loại các event lịch sử FRONT-OUT/REAR-IN; cột cũ `front_out`/`rear_in` còn trong API để tương thích nhưng luôn 0 trong thống kê hợp lệ.
 
-Sau khi session có crop IN/OUT:
+Gán nhãn thủ công và đánh giá:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_reid.py --session 2 --mode bus-unpaired
+.\.venv\Scripts\python.exe scripts\label_video.py --video D:\video\front.mp4 --output runs\front_gt.csv
+.\.venv\Scripts\python.exe scripts\evaluate.py --pred runs\trip-001\front_events.csv --gt runs\front_gt.csv --output runs\front_eval.json
 ```
 
-Chế độ:
+Trong cửa sổ nhãn: `I` = IN, `O` = OUT, `Space` = tạm dừng, `Q` = lưu. Với event timestamps, evaluator ghép 1-1 trong tolerance 1 giây để tính precision/recall, đồng thời tính MAE đếm theo clip/chiều. Không có nhãn thì tất cả metric là `N/A` (`null` trong JSON). Các test dùng `FakeDetector` chỉ chứng minh phần mềm nối đúng, không đo AI accuracy.
 
-- `bus-unpaired`: candidate chỉ `UNVERIFIED`/`UNKNOWN`.
-- `paired-gt`: chỉ dùng khi có identity ground truth thực.
-- `technical-benchmark`: dành cho dataset Re-ID có nhãn như iLIDS-VID, không phải KPI bus.
-
-Threshold cosine mặc định `0.72`, ambiguity margin `0.05`; similarity không phải xác suất đã hiệu chuẩn.
-
-## Đánh giá và test
+## Test
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\evaluate.py --pred runs\trip01\front_events.csv --gt data\processed\pcds_manifest.csv
-.\.venv\Scripts\python.exe -m pytest --cov=busreid --cov=backend
+.\.venv\Scripts\python.exe -m pytest --cov=busreid --cov=backend -W error
 .\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m pip check
 ```
 
-Count MAE chỉ xuất khi prediction/GT có cùng clip và direction. Rank-1/mAP Re-ID giữ `NA` khi không có identity ground truth.
+CI Windows/Python 3.11 chạy các lệnh tương tự, không cần GPU/video/credential. Xem kết quả đo theo commit trong [TEST_REPORT.md](TEST_REPORT.md), nguồn dữ liệu trong [DATA_SOURCES.md](DATA_SOURCES.md), giới hạn trong [LIMITATIONS.md](LIMITATIONS.md) và trạng thái nghiệm thu trong [ACCEPTANCE_CHECKLIST.md](ACCEPTANCE_CHECKLIST.md).
 
-## Đổi sang RTSP
+## Dữ liệu cũ và hướng tiếp theo
 
-Core không đổi: truyền URL `rtsp://...` vào `OpenCVVideoSource`/dashboard thay MP4. Trong triển khai xe thật nên lưu credential bằng secret/environment, dùng một worker cho mỗi camera, đồng bộ clock và đặt camera calibration riêng; URL log đã được redaction nhưng URI trong database local vẫn có thể chứa credential nên phải bảo vệ file DB.
+Schema SQLite của phiên bản BusReID trên `main` **không có migration tự động**. Trước khi chuyển môi trường, sao lưu file DB cũ ở vị trí riêng; không trỏ `BUSSTOP_DATABASE_URL` của bản này vào DB cũ. Tạo DB mới bằng `scripts/run_demo.py` hoặc qua API, chỉ nhập dữ liệu thật sau khi kiểm tra provenance và đồng bộ nguồn. Không xóa DB cũ để lấy chỗ.
 
-Kết quả chạy thực của máy hiện tại nằm trong [TEST_REPORT.md](TEST_REPORT.md); hạn chế ở [LIMITATIONS.md](LIMITATIONS.md).
-
+Ưu tiên tiếp theo: thu thập hai video camera cửa cùng chuyến với GPS/cửa và nhãn thủ công, hiệu chỉnh ROI/clock, đo accuracy, rồi thử RTSP dài hạn và bảo mật trước pilot. Chưa có license riêng được khai báo cho source repository; thư viện và clip công khai tuân theo license của từng nguồn ghi tại [DATA_SOURCES.md](DATA_SOURCES.md).

@@ -34,4 +34,3 @@ def test_documented_pcds_per_clip_rows(tmp_path: Path) -> None:
         {"clip": "depth_001.avi", "entering_gt": 2, "exiting_gt": 1, "video_type": 3},
         {"clip": "depth_002.avi", "entering_gt": 0, "exiting_gt": 4, "video_type": 1},
     ]
-

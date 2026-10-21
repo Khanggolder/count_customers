@@ -30,7 +30,8 @@ def redact_source(source: str | int) -> str:
     host = parts.hostname or ""
     if parts.port:
         host = f"{host}:{parts.port}"
-    return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
+    # RTSP query strings commonly contain access tokens; never persist them.
+    return urlunsplit((parts.scheme, host, parts.path, "", ""))
 
 
 class VideoSource(ABC):
@@ -52,6 +53,8 @@ class OpenCVVideoSource(VideoSource):
         self.capture: cv2.VideoCapture | None = None
         self.metadata: VideoMetadata | None = None
         self.frame_index = 0
+        self.generation = 0
+        self._pts_origin_s: float | None = None
 
     @property
     def is_rtsp(self) -> bool:
@@ -75,6 +78,7 @@ class OpenCVVideoSource(VideoSource):
         source_type = "rtsp" if self.is_rtsp else ("webcam" if isinstance(self.source, int) else "mp4")
         self.metadata = VideoMetadata(source_type, width, height, fps, count, duration)
         self.frame_index = 0
+        self._pts_origin_s = None
         return self.metadata
 
     def _reconnect(self) -> bool:
@@ -85,6 +89,7 @@ class OpenCVVideoSource(VideoSource):
             try:
                 time.sleep(min(0.5 * (attempt + 1), 2.0))
                 self.open()
+                self.generation += 1
                 logger.info("Đã kết nối lại RTSP %s", redact_source(self.source))
                 return True
             except RuntimeError:
@@ -102,7 +107,13 @@ class OpenCVVideoSource(VideoSource):
         if ok:
             position_ms = self.capture.get(cv2.CAP_PROP_POS_MSEC)
             if position_ms > 0:
-                timestamp_s = position_ms / 1000.0
+                position_s = position_ms / 1000.0
+                if self.is_rtsp:
+                    if self._pts_origin_s is None:
+                        self._pts_origin_s = position_s
+                    timestamp_s = max(0.0, position_s - self._pts_origin_s)
+                else:
+                    timestamp_s = position_s
             self.frame_index += 1
         return bool(ok), frame if ok else None, timestamp_s
 
@@ -125,4 +136,3 @@ def probe_video(path: str | Path) -> VideoMetadata:
         return source.open()
     finally:
         source.close()
-

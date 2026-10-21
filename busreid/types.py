@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -19,14 +18,6 @@ class Direction(StrEnum):
     OUT = "OUT"
 
 
-class MatchStatus(StrEnum):
-    PENDING = "PENDING"
-    CONFIRMED = "CONFIRMED"
-    UNKNOWN = "UNKNOWN"
-    UNVERIFIED = "UNVERIFIED"
-    REJECTED = "REJECTED"
-
-
 @dataclass(slots=True)
 class Detection:
     track_id: str
@@ -38,6 +29,14 @@ class Detection:
     def bottom_center(self) -> tuple[float, float]:
         x1, _, x2, y2 = self.bbox
         return ((x1 + x2) / 2.0, float(y2))
+
+    def anchor(self, mode: str = "bottom_center") -> tuple[float, float]:
+        x1, y1, x2, y2 = self.bbox
+        if mode == "center":
+            return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+        if mode != "bottom_center":
+            raise ValueError(f"Unsupported anchor mode: {mode}")
+        return self.bottom_center
 
 
 @dataclass(slots=True)
@@ -51,6 +50,7 @@ class CrossingEvent:
     crop_path: str | None = None
     synthetic: bool = False
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    capture_time_utc: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -61,25 +61,4 @@ class TrackCrop:
     frame_index: int
 
 
-@dataclass(slots=True)
-class EmbeddingRecord:
-    event_id: int | None
-    track_id: str
-    timestamp_s: float
-    embedding: np.ndarray
-    passenger_id: str | None = None
-    crop_path: Path | None = None
-
-
-@dataclass(slots=True)
-class MatchDecision:
-    out_event_id: int | None
-    in_event_id: int | None
-    status: MatchStatus
-    similarity: float | None
-    reason: str
-    passenger_id: str | None = None
-
-
 JSONDict = dict[str, Any]
-
