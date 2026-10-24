@@ -8,7 +8,8 @@
 - ID-switch recovery của counter chỉ chuyển state khi có đúng một ứng viên gần trong grace window; cảnh đông/che khuất vẫn cần calibration và ground truth tại hiện trường.
 - Quy tắc FRONT-IN/REAR-OUT là giả định vận hành bắt buộc; nếu thực tế hành khách đi sai cửa, chuyển động đó không được tính là lưu lượng hợp lệ và cần quy trình vận hành/review riêng. Chưa đo tỷ lệ vi phạm ở hiện trường.
 - SQLite cũ có thể còn bản ghi sai chiều: chúng được giữ để kiểm toán, không được đếm trong flow/export mới. Chưa có công cụ migration gắn nhãn hàng loạt cho dữ liệu lịch sử.
-- Cancellation API hiện ghi `CANCEL_REQUESTED`; chưa nối qua process manager bền vững sau restart. CLI worker có isolation nhưng chưa có distributed queue/WebSocket progress.
+- Nút hủy AI Video Lab ghi marker cục bộ để worker dừng giữa các frame; cancellation API hiện ghi `CANCEL_REQUESTED` và chưa nối qua process manager bền vững sau restart. Chưa có distributed queue/WebSocket progress; preview chỉ là JPEG cập nhật định kỳ.
+- Dashboard job nằm trong session Streamlit; restart Streamlit không tự khôi phục điều khiển job đang chạy. Upload mặc định giới hạn 200 MB; file lớn dùng đường dẫn MP4 local. RTSP vật lý chưa được xác nhận trên dashboard.
 - Timestamp video không có capture metadata được ghi rõ `PROCESSING_TIME_NOT_CAPTURE_TIME`; không được diễn giải thành giờ quay.
 - Dashboard/API chưa có authentication, TLS, RBAC hoặc retention policy. Chỉ bind localhost cho MVP; không public Internet.
 - SQLite và crop local phù hợp demo, chưa phù hợp fleet nhiều xe. Cần PostgreSQL/object storage/message broker khi production.

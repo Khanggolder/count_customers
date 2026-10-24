@@ -1,5 +1,23 @@
 # Báo cáo kiểm thử BusStop Flow AI
 
+## AI Video Lab — 2026-10-24 (nhánh `feature/ai-video-lab`)
+
+Windows/Python 3.11.0: `pytest --cov=busreid --cov=backend -W error` **56 passed**, combined coverage **87%**; `ruff check .` và `pip check` đều đạt. Test mới gồm upload MP4, chọn path/RTSP, empty state, dashboard sáu tab và video component, FRONT-IN/REAR-OUT, reverse không đếm, progress/cancel/failure, kiểm tra output H.264, timeline. Các video fixture dùng **FakeDetector**; chúng chỉ kiểm thử phần mềm, không đo accuracy AI. Streamlit AppTest xác nhận video element render; không phải browser E2E.
+
+Inference YOLO11n + ByteTrack thật trên RTX 3050 với clip Pexels 31337217 tại máy này:
+
+| Run | Frames | Processing FPS | Events | Output |
+| --- | ---: | ---: | ---: | --- |
+| FRONT, 40 frame | 40 | 2.8972 | 0 | H.264 mở được, 40 frame |
+| FRONT, 15 frame sau chỉnh overlay | 15 | 2.5062 | 0 | H.264 mở được; preview 1280 px |
+| FRONT + REAR, cùng clip chỉ để smoke hai worker | 10 + 10 | 2.0531 / 2.0812 | 0 + 0 | Hai output H.264, không lỗi worker |
+
+Hai worker trong smoke cùng dùng **một** clip, nên đây không phải hai camera vật lý và không xác nhận ghép chuyến. Clip quay ngoài xe, ROI mặc định không phù hợp để benchmark crossing. Không có nhãn cùng clip, accuracy/MAE/precision/recall AI đều `N/A`; không có telemetry nên các run giữ `UNASSIGNED` và flow trạm rỗng. Run 40 frame đầu đã thêm một Trip video-only vào SQLite mặc định; các run sau dùng DB riêng trong `runs/`.
+
+Smoke từ helper upload của dashboard: đã sao chép clip vào `runs/video_lab/<run-id>/uploads/`, chạy subprocess YOLO trên 3 frame với DB riêng, exit `0`, có `front_annotated.mp4` H.264 và `run_summary.json`; provenance `REAL_VIDEO_AI`, mode `UNPAIRED`, 0 event. Đây là xác nhận đường chạy upload → worker, chưa phải click/upload trong trình duyệt.
+
+Kiểm thử trình duyệt tương tác chưa thực hiện được: công cụ Computer Use của phiên này lỗi native pipe sau retry và reset. Cần kiểm tra thủ công upload → Start → preview → Play trên `http://localhost:8501`.
+
 ## Cleanup trước merge — 2026-10-21
 
 Trên Windows/Python 3.11.0, baseline của commit `d185153385365e59b58f412bb0256371ce3b1806` trước cleanup:

@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Event, Lock
 
 from .config import AppConfig
-from .pipeline import CameraPipeline, PipelineResult
+from .pipeline import CameraPipeline, OverlayOptions, PipelineCancelled, PipelineResult
 
 
 @dataclass(slots=True)
@@ -42,6 +42,8 @@ class DualCameraRunner:
         output_dir: Path,
         max_frames: int | None,
         recording_start_time: datetime | None,
+        overlay: OverlayOptions | None,
+        cancel_file: Path | None,
     ) -> PipelineResult:
         with self._lock:
             self.status[camera].state = "RUNNING"
@@ -50,6 +52,10 @@ class DualCameraRunner:
         options = {"max_frames": max_frames}
         if recording_start_time is not None:
             options["recording_start_time"] = recording_start_time
+        if overlay is not None:
+            options["overlay"] = overlay
+        if cancel_file is not None:
+            options["cancel_file"] = cancel_file
         result = CameraPipeline(self.config.cameras[camera], self.config).run(source, output_dir, **options)
         with self._lock:
             self.status[camera].state = "COMPLETED"
@@ -61,6 +67,8 @@ class DualCameraRunner:
         output_dir: str | Path,
         max_frames: int | None = None,
         recording_start_time: datetime | None = None,
+        overlay: OverlayOptions | None = None,
+        cancel_file: Path | None = None,
     ) -> DualCameraResult:
         valid = {
             camera: source for camera, source in sources.items() if source and camera in self.config.cameras
@@ -73,7 +81,14 @@ class DualCameraRunner:
         with ThreadPoolExecutor(max_workers=len(valid), thread_name_prefix="bus-camera") as pool:
             futures: dict[Future, str] = {
                 pool.submit(
-                    self._run_one, camera, source, destination, max_frames, recording_start_time
+                    self._run_one,
+                    camera,
+                    source,
+                    destination,
+                    max_frames,
+                    recording_start_time,
+                    overlay,
+                    cancel_file,
                 ): camera
                 for camera, source in valid.items()
             }
@@ -81,9 +96,13 @@ class DualCameraRunner:
                 camera = futures[future]
                 try:
                     outcome.results[camera] = future.result()
+                except PipelineCancelled:
+                    outcome.cancelled = True
+                    with self._lock:
+                        self.status[camera] = WorkerStatus("CANCELLED")
                 except Exception as exc:  # isolate worker failures and report them
                     outcome.errors[camera] = f"{type(exc).__name__}: {exc}"
                     with self._lock:
                         self.status[camera] = WorkerStatus("FAILED", outcome.errors[camera])
-        outcome.cancelled = self.cancel_event.is_set()
+        outcome.cancelled = outcome.cancelled or self.cancel_event.is_set()
         return outcome
