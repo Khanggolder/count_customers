@@ -172,6 +172,10 @@ def test_video_lab_launch_does_not_select_synthetic_trip(tmp_path: Path, monkeyp
     monkeypatch.setattr("app.video_lab.subprocess.Popen", fake_popen)
     source = tmp_path / "uploaded.mp4"
     fixture_video(source)
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "cameras.yaml").write_bytes(
+        (Path(__file__).parents[1] / "configs" / "cameras.yaml").read_bytes()
+    )
     start_job(tmp_path, tmp_path, {"front": str(source)}, hidden_layers={"boxes"})
     assert "--front" in captured["command"]
     assert "--rear" not in captured["command"]

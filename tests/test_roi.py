@@ -11,7 +11,14 @@ from app.roi_editor import _apply_click, _display_frame, read_video_frame
 from busreid.config import load_config
 from busreid.counting import DirectionCounter
 from busreid.pipeline import CameraPipeline
-from busreid.roi import restore_backup, save_zones, to_normalized, to_pixels, validate_zones
+from busreid.roi import (
+    restore_backup,
+    save_zones,
+    to_normalized,
+    to_pixels,
+    validate_polygon,
+    validate_zones,
+)
 from busreid.types import Detection, Direction
 
 ZONE_A = [(0.1, 0.1), (0.4, 0.1), (0.4, 0.4), (0.1, 0.4)]
@@ -56,8 +63,67 @@ def test_save_load_backup_restore_and_policy(tmp_path: Path) -> None:
     assert updated.cameras["front"].zone_b == ZONE_B
     assert updated.cameras["front"].event_direction == Direction.IN
     assert updated.cameras["rear"] == original.cameras["rear"]
-    restore_backup(path)
+    restore_backup(path, "front")
     assert load_config(path).cameras["front"] == original.cameras["front"]
+
+
+@pytest.mark.parametrize("points", [[], [(0.1, 0.1)], [(0.1, 0.1), (0.2, 0.2)]])
+def test_incomplete_polygons_render_without_changing_saved_config(tmp_path: Path, points) -> None:
+    path = config_copy(tmp_path)
+    before = path.read_bytes()
+    camera = load_config(path).cameras["front"]
+    image = _display_frame(
+        np.zeros((100, 100, 3), dtype=np.uint8), camera, {"a": points, "b": ZONE_B}
+    )
+    assert image.size == (100, 100)
+    with pytest.raises(ValueError, match="ít nhất 3"):
+        validate_polygon(points)
+    assert path.read_bytes() == before
+
+
+def test_complete_and_invalid_polygons_still_render_for_repair(tmp_path: Path) -> None:
+    camera = load_config(config_copy(tmp_path)).cameras["front"]
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    for points in (
+        [(0.1, 0.1), (0.4, 0.1), (0.1, 0.4)],
+        ZONE_A,
+        [(0.1, 0.1), (0.4, 0.4), (0.1, 0.4), (0.4, 0.1)],
+        [(0.1, 0.1), (0.2, 0.2), (0.3, 0.3)],
+    ):
+        assert _display_frame(frame, camera, {"a": points, "b": ZONE_B}).size == (100, 100)
+    with pytest.raises(ValueError, match="tự cắt"):
+        validate_polygon([(0.1, 0.1), (0.4, 0.1), (0.1, 0.4), (0.4, 0.4)])
+    with pytest.raises(ValueError, match="diện tích"):
+        validate_polygon([(0.1, 0.1), (0.2, 0.2), (0.3, 0.3)])
+
+
+@pytest.mark.parametrize("camera", ["front", "rear"])
+def test_restore_only_selected_camera_roi_and_preserves_other_settings(tmp_path: Path, camera: str) -> None:
+    path = config_copy(tmp_path)
+    original = load_config(path)
+    save_zones(path, camera, ZONE_A, ZONE_B)
+    other = "rear" if camera == "front" else "front"
+    save_zones(path, other, ZONE_A, ZONE_B)
+    before_restore = load_config(path)
+    recovery = restore_backup(path, camera)
+    restored = load_config(path)
+    assert recovery.is_file()
+    assert restored.cameras[camera].zone_a == original.cameras[camera].zone_a
+    assert restored.cameras[other] == before_restore.cameras[other]
+    assert restored.detector == original.detector
+    assert restored.cameras[camera].event_direction == original.cameras[camera].event_direction
+
+
+def test_restore_uses_backup_roi_without_reverting_unrelated_camera(tmp_path: Path) -> None:
+    path = config_copy(tmp_path)
+    original = load_config(path)
+    save_zones(path, "front", ZONE_A, ZONE_B)
+    save_zones(path, "rear", ZONE_A, ZONE_B)
+    front_before = load_config(path).cameras["front"]
+    restore_backup(path, "rear")
+    result = load_config(path)
+    assert result.cameras["front"] == front_before
+    assert result.cameras["rear"] == original.cameras["rear"]
 
 
 def test_new_pipeline_uses_saved_roi_and_running_pipeline_keeps_snapshot(tmp_path: Path) -> None:
@@ -110,3 +176,18 @@ def test_click_edit_undo_and_video_frame(tmp_path: Path) -> None:
     assert count == 3
     assert fps == 5
     assert frame.mean() > 100
+
+
+@pytest.mark.parametrize("label", ["a", "b"])
+def test_first_and_second_click_and_cleared_zone_preview(tmp_path: Path, label: str) -> None:
+    camera = load_config(config_copy(tmp_path)).cameras["front"]
+    state = {"zones": {"a": copy.deepcopy(ZONE_A), "b": copy.deepcopy(ZONE_B)}, "history": [], "revision": 0}
+    state["zones"][label] = []
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    assert _display_frame(frame, camera, state["zones"]).size == (100, 100)
+    for index, coords in enumerate(((10, 10), (30, 10)), start=1):
+        _apply_click(state, label, "Thêm đỉnh", {"x": coords[0], "y": coords[1]}, (100, 100), 0)
+        assert len(state["zones"][label]) == index
+        assert _display_frame(frame, camera, state["zones"]).size == (100, 100)
+    state["zones"] = state["history"].pop()
+    assert len(state["zones"][label]) == 1

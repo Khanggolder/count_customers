@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
 import subprocess
 import sys
 import uuid
@@ -92,14 +93,22 @@ def start_job(
     max_frames: int = 0,
     hidden_layers: set[str] | None = None,
     session_only: bool = False,
+    start_frame: int = 0,
 ) -> subprocess.Popen:
     if not sources:
         raise ValueError("Chọn ít nhất một video FRONT hoặc REAR")
+    if session_only and (trip_id or telemetry_file or capture_start or synchronized):
+        raise ValueError("Phiên đếm độc lập không nhận Trip hoặc telemetry")
+    if start_frame and not session_only:
+        raise ValueError("Chọn frame bắt đầu chỉ hỗ trợ Test ROI độc lập")
+    output.mkdir(parents=True, exist_ok=True)
+    config_snapshot = output / "cameras_snapshot.yaml"
+    shutil.copy2(root / "configs" / "cameras.yaml", config_snapshot)
     command = [
         sys.executable,
         str(root / "scripts" / ("run_count_session.py" if session_only else "run_count.py")),
         "--config",
-        str(root / "configs" / "cameras.yaml"),
+        str(config_snapshot),
         "--output",
         str(output),
         "--stop-file" if session_only else "--cancel-file",
@@ -107,8 +116,6 @@ def start_job(
     ]
     for camera, source in sources.items():
         command.extend([f"--{camera}", source])
-    if session_only and (trip_id or telemetry_file or capture_start or synchronized):
-        raise ValueError("Phiên đếm độc lập không nhận Trip hoặc telemetry")
     if trip_id:
         command.extend(["--trip-id", trip_id])
     if telemetry_file:
@@ -119,6 +126,8 @@ def start_job(
         command.append("--telemetry-synchronized")
     if max_frames:
         command.extend(["--max-frames", str(max_frames)])
+    if start_frame:
+        command.extend(["--start-frame", str(start_frame)])
     for layer in sorted(hidden_layers or set()):
         command.append(f"--hide-{layer}")
     log = (output / "process.log").open("w", encoding="utf-8")

@@ -35,6 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", default="configs/cameras.yaml")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--max-frames", type=int)
+    parser.add_argument("--start-frame", type=int, default=0)
     parser.add_argument("--stop-file", type=Path, required=True)
     for layer in ("boxes", "track-ids", "zones", "trajectory", "events"):
         parser.add_argument(f"--hide-{layer}", action="store_true")
@@ -59,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         sources,
         output,
         max_frames=args.max_frames,
+        start_frame=args.start_frame,
         overlay=overlay,
         stop_file=args.stop_file,
     )

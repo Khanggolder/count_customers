@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 
 import yaml
@@ -64,11 +63,8 @@ def validate_polygon(points: list[Point]) -> None:
         raise ValueError("Mỗi vùng cần ít nhất 3 đỉnh")
     if any(not (0 <= x <= 1 and 0 <= y <= 1) for x, y in points):
         raise ValueError("Đỉnh nằm ngoài frame hoặc không thuộc [0, 1]")
-    if len(set(points)) != len(points):
+    if len({tuple(point) for point in points}) != len(points):
         raise ValueError("Polygon có đỉnh trùng nhau")
-    area = abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(points, points[1:] + points[:1], strict=False)))
-    if area < 1e-8:
-        raise ValueError("Polygon có diện tích bằng 0")
     edges = list(zip(points, points[1:] + points[:1], strict=False))
     for i, (a, b) in enumerate(edges):
         for j, (c, d) in enumerate(edges):
@@ -76,6 +72,9 @@ def validate_polygon(points: list[Point]) -> None:
                 continue
             if _intersects(a, b, c, d):
                 raise ValueError("Polygon tự cắt")
+    area = abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(points, points[1:] + points[:1], strict=False)))
+    if area < 1e-8:
+        raise ValueError("Polygon có diện tích bằng 0")
 
 
 def validate_zones(zone_a: list[Point], zone_b: list[Point]) -> None:
@@ -110,16 +109,36 @@ def save_zones(path: Path, camera: str, zone_a: list[Point], zone_b: list[Point]
         raise ValueError("Camera không có trong cấu hình")
     raw["cameras"][camera]["zone_a"] = [list(point) for point in zone_a]
     raw["cameras"][camera]["zone_b"] = [list(point) for point in zone_b]
-    backup = path.with_name(path.name + ".bak")
-    shutil.copy2(path, backup)
+    backup = path.with_name(f"{path.name}.{camera}.bak")
+    previous = yaml.safe_load(path.read_text(encoding="utf-8"))
+    _write_yaml(backup, previous)
+    # Keep the legacy whole-file snapshot for recovery, but UI restore is camera-scoped.
+    _write_yaml(path.with_name(path.name + ".bak"), previous)
     _write_yaml(path, raw)
     return backup
 
 
-def restore_backup(path: Path) -> None:
-    backup = path.with_name(path.name + ".bak")
+def restore_backup(path: Path, camera: str) -> Path:
+    camera = camera.lower()
+    if camera not in {"front", "rear"}:
+        raise ValueError("Chỉ hỗ trợ FRONT hoặc REAR")
+    backup = path.with_name(f"{path.name}.{camera}.bak")
+    if not backup.is_file():
+        backup = path.with_name(path.name + ".bak")
     if not backup.is_file():
         raise FileNotFoundError("Chưa có bản sao lưu ROI")
     load_config(backup)
-    raw = yaml.safe_load(backup.read_text(encoding="utf-8"))
+    load_config(path)
+    previous = yaml.safe_load(backup.read_text(encoding="utf-8"))
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if camera not in previous["cameras"] or camera not in raw["cameras"]:
+        raise ValueError("Camera không có trong cấu hình")
+    zone_a = previous["cameras"][camera]["zone_a"]
+    zone_b = previous["cameras"][camera]["zone_b"]
+    validate_zones(zone_a, zone_b)
+    recovery = path.with_name(f"{path.name}.{camera}.pre-restore.bak")
+    _write_yaml(recovery, raw)
+    raw["cameras"][camera]["zone_a"] = zone_a
+    raw["cameras"][camera]["zone_b"] = zone_b
     _write_yaml(path, raw)
+    return recovery

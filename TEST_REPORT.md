@@ -1,5 +1,11 @@
 # Báo cáo kiểm thử BusStop Flow AI
 
+## Hoàn thiện ROI PR #4 — 2026-10-24
+
+Windows/Python 3.11: `pytest --cov=busreid --cov=backend -W error` **104 passed**, combined coverage **87%**; Ruff và `pip check` đạt. Test mới dùng FakeDetector/MP4 fixture để xác nhận seek từ frame tuyệt đối, giới hạn đoạn xử lý, timestamp/CSV/video annotated, FRONT-IN/REAR-OUT, không đếm chiều ngược; FakeDetector chỉ kiểm thử phần mềm, không đo AI accuracy. Test thêm polygon 0–n đỉnh, lỗi webcam/RTSP qua fake capture, giữ draft khi lỗi, backup/restore riêng FRONT/REAR, snapshot YAML cho worker và Streamlit AppTest xóa vùng/chuyển camera/MP4 thiếu không crash. Browser click/kéo thật **chưa kiểm chứng**: IAB không khả dụng, Windows Computer Use lỗi native pipe sau retry/reset. Checklist thủ công nằm trong README.
+
+Smoke YOLO11n + ByteTrack thật với `data/raw/in.mp4` local, RTX 3050 Laptop GPU: start frame 450, max 15 → COMPLETED, 15 frame annotated H.264, `next_frame_index=465`, 4.22 processing FPS, 0 crossing. Thử frame 10–69 (60 frame) → COMPLETED, 0 crossing. Hai đoạn không có nhãn ground truth; 0 là kết quả model trong đoạn đó, không phải độ chính xác. `runs/roi_seek_smoke_20261024/` và `runs/roi_event_smoke_20261024/` bị ignore, không commit.
+
 ## ROI polygon editor — 2026-10-24 (`feature/roi-polygon-editor`)
 
 Windows/Python 3.11: **77 passed** (`pytest -q -o addopts= --disable-warnings`), `ruff check .` và `pip check` đạt. Test mới xác nhận tọa độ pixel ↔ normalized, loại polygon thiếu đỉnh/tự cắt/ngoài frame/chồng lấn, lưu/tải và khôi phục backup YAML, giữ FRONT-IN/REAR-OUT, `CameraPipeline` mới dùng ROI vừa lưu còn instance đang chạy giữ ROI cũ, thao tác click/dời đỉnh, đọc frame MP4 và dashboard vẫn render các tab cũ.

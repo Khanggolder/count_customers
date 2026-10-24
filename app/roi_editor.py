@@ -13,12 +13,24 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 
 from busreid.config import CameraConfig, load_config
 from busreid.pipeline import OverlayOptions, annotate_frame
-from busreid.roi import restore_backup, save_zones, to_normalized, to_pixels, validate_zones
+from busreid.roi import restore_backup, save_zones, to_normalized, to_pixels, validate_polygon, validate_zones
+from busreid.video import OpenCVVideoSource
 
 from .video_lab import camera_status, new_job_dir, save_upload, start_job
 
 
 def read_video_frame(path: str | int, frame_index: int = 0) -> tuple[np.ndarray, int, float]:
+    if isinstance(path, str) and not path.lower().startswith(("rtsp://", "rtsps://")):
+        source = OpenCVVideoSource(path)
+        try:
+            metadata = source.open()
+            source.seek(frame_index)
+            ok, frame, _ = source.read()
+            if not ok or frame is None or frame.size == 0:
+                raise ValueError("Không đọc được frame đã chọn")
+            return frame, metadata.frame_count or 0, metadata.fps
+        finally:
+            source.close()
     capture = (
         cv2.VideoCapture(
             path,
@@ -33,8 +45,6 @@ def read_video_frame(path: str | int, frame_index: int = 0) -> tuple[np.ndarray,
             raise ValueError("Không mở được nguồn video/camera")
         count = max(0, int(capture.get(cv2.CAP_PROP_FRAME_COUNT)))
         fps = float(capture.get(cv2.CAP_PROP_FPS))
-        if frame_index and count:
-            capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
         ok, frame = capture.read()
         if not ok or frame is None or frame.size == 0:
             raise ValueError("Không đọc được frame đã chọn")
@@ -52,13 +62,21 @@ def _display_frame(
         frame = cv2.resize(frame, (round(width * scale), round(height * scale)))
     height, width = frame.shape[:2]
     shaded = frame.copy()
+    complete = {}
     for label, color in (("a", (0, 200, 255)), ("b", (255, 180, 0))):
         points = zones[label]
-        if len(points) >= 3:
-            cv2.fillPoly(shaded, [np.array([to_pixels(p, width, height) for p in points])], color)
+        try:
+            validate_polygon(points)
+            complete[label] = True
+        except ValueError:
+            complete[label] = False
+        if complete[label]:
+            contour = np.asarray([to_pixels(p, width, height) for p in points], dtype=np.int32)
+            cv2.fillPoly(shaded, [contour], color)
     frame = cv2.addWeighted(shaded, 0.2, frame, 0.8, 0)
     preview_camera = copy.copy(camera)
-    preview_camera.zone_a, preview_camera.zone_b = zones["a"], zones["b"]
+    preview_camera.zone_a = zones["a"] if complete["a"] else []
+    preview_camera.zone_b = zones["b"] if complete["b"] else []
     frame = annotate_frame(
         frame,
         [],
@@ -68,11 +86,14 @@ def _display_frame(
     )
     for label, color in (("a", (0, 200, 255)), ("b", (255, 180, 0))):
         points = zones[label]
+        contour = np.asarray([to_pixels(p, width, height) for p in points], dtype=np.int32)
+        if len(contour) >= 2 and not complete[label]:
+            cv2.polylines(frame, [contour], False, color, 2)
         for index, point in enumerate(points):
             x, y = to_pixels(point, width, height)
             cv2.circle(frame, (x, y), 6, color, -1)
             cv2.putText(frame, str(index + 1), (x + 7, y - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
-    if zones["a"] and zones["b"]:
+    if complete["a"] and complete["b"]:
         start = np.mean([to_pixels(p, width, height) for p in zones["a"]], axis=0).astype(int)
         end = np.mean([to_pixels(p, width, height) for p in zones["b"]], axis=0).astype(int)
         cv2.arrowedLine(frame, tuple(start), tuple(end), (255, 255, 255), 2, tipLength=0.18)
@@ -102,7 +123,8 @@ def _mutate(state: dict, zones: dict[str, list[tuple[float, float]]]) -> None:
 
 def _select_source(root: Path, camera: str, state: dict) -> tuple[str | int | None, bool]:
     mode = st.radio(
-        "Nguồn frame", ["Video có sẵn", "Upload MP4", "Đường dẫn MP4", "Webcam", "RTSP"], horizontal=True
+        "Nguồn frame", ["Video có sẵn", "Upload MP4", "Đường dẫn MP4", "Webcam", "RTSP"],
+        horizontal=True, key=f"roi_mode_{camera}",
     )
     if mode != state.get("mode"):
         state.pop("live_frame", None)
@@ -132,14 +154,24 @@ def _select_source(root: Path, camera: str, state: dict) -> tuple[str | int | No
     if mode == "Webcam":
         index = int(st.number_input("Webcam index trên máy chạy Streamlit", min_value=0, step=1))
         if st.button("Lấy frame webcam"):
-            state["live_frame"] = read_video_frame(index)[0]
+            try:
+                state["live_frame"] = read_video_frame(index)[0]
+            except (ValueError, OSError, RuntimeError, cv2.error):
+                st.error("Không mở/đọc được webcam. Kiểm tra index, quyền truy cập và camera đang dùng.")
+                if "live_frame" in state:
+                    st.info("Đang giữ frame cũ và bản nháp ROI; chưa lấy được frame webcam mới.")
         return index, False
     url = st.text_input("RTSP được cấp phép", type="password", key=f"roi_rtsp_{camera}")
     if st.button("Lấy frame RTSP"):
         if not url.lower().startswith(("rtsp://", "rtsps://")):
             st.error("URL phải bắt đầu bằng rtsp:// hoặc rtsps://")
         else:
-            state["live_frame"] = read_video_frame(url)[0]
+            try:
+                state["live_frame"] = read_video_frame(url)[0]
+            except (ValueError, OSError, RuntimeError, cv2.error):
+                st.error("Không kết nối/đọc được RTSP trong 5 giây. Kiểm tra URL, quyền truy cập và mạng.")
+                if "live_frame" in state:
+                    st.info("Đang giữ frame cũ và bản nháp ROI; chưa lấy được frame RTSP mới.")
     st.caption("Chỉ lấy một frame khi bấm nút; không lưu RTSP credential vào YAML.")
     return url if url else None, False
 
@@ -182,17 +214,23 @@ def render_roi_editor(root: Path) -> None:
     config_path = root / "configs" / "cameras.yaml"
     camera = st.selectbox("Camera", ["front", "rear"], format_func=str.upper)
     state = _editor_state(camera, config_path)
+    if state["revision"] != state["saved_revision"]:
+        st.warning(f"{camera.upper()} có chỉnh sửa ROI chưa lưu; chuyển camera không xóa bản nháp này.")
     source, is_mp4 = _select_source(root, camera, state)
     frame = None
     frame_index = 0
+    frame_count = 0
     if is_mp4 and source:
         try:
-            _, count, fps = read_video_frame(source)
-            frame_index = st.slider("Frame MP4", 0, max(0, count - 1), 0, key=f"roi_frame_{camera}")
+            _, frame_count, fps = read_video_frame(source)
+            if source != state.get("display_source"):
+                state["display_source"] = source
+                st.session_state.pop(f"roi_frame_{camera}", None)
+            frame_index = st.slider("Frame MP4", 0, max(0, frame_count - 1), 0, key=f"roi_frame_{camera}")
             frame = read_video_frame(source, frame_index)[0]
-            st.caption(f"Frame {frame_index + 1}/{count or '?'} · {fps:.2f} FPS")
-        except (ValueError, OSError) as exc:
-            st.error(str(exc))
+            st.caption(f"Frame {frame_index + 1}/{frame_count or '?'} · {fps:.2f} FPS")
+        except (ValueError, OSError, RuntimeError, cv2.error):
+            st.error("Không mở/đọc được MP4 hoặc frame đã chọn. Kiểm tra video và vị trí frame.")
     elif not is_mp4:
         frame = state.get("live_frame")
     if frame is None:
@@ -265,14 +303,14 @@ def render_roi_editor(root: Path) -> None:
             st.success(f"Đã lưu. Bản sao lưu: {backup.name}. Phiên inference mới sẽ dùng ROI này.")
         except (OSError, ValueError) as exc:
             st.error(f"Không lưu được ROI: {exc}")
-    if right.button("Khôi phục bản sao lưu"):
+    if right.button("Khôi phục ROI camera này từ bản sao lưu"):
         try:
-            restore_backup(config_path)
+            restore_backup(config_path, camera)
             configured = load_config(config_path).cameras[camera]
             _mutate(state, {"a": list(configured.zone_a), "b": list(configured.zone_b)})
             state["saved_revision"] = state["revision"]
             st.rerun()
-        except (FileNotFoundError, ValueError) as exc:
+        except (FileNotFoundError, ValueError, OSError) as exc:
             st.error(str(exc))
     st.markdown("#### Test ROI trên đoạn MP4")
     st.caption(
@@ -280,7 +318,13 @@ def render_roi_editor(root: Path) -> None:
     )
     if state["revision"] != state["saved_revision"]:
         st.info("Lưu ROI trước khi Test ROI để worker dùng đúng vùng đang hiển thị.")
+    use_current = st.checkbox("Bắt đầu tại frame đang hiển thị", value=True, disabled=not is_mp4)
+    start_frame = frame_index if use_current else st.number_input(
+        "Frame bắt đầu (0-based)", min_value=0, max_value=max(0, frame_count - 1), value=0
+    )
     limit = st.number_input("Số frame kiểm thử", min_value=1, max_value=600, value=90)
+    if is_mp4 and frame_count:
+        st.caption(f"Sẽ xử lý frame {start_frame}–{min(frame_count - 1, start_frame + int(limit) - 1)}.")
     current_job = st.session_state.get("roi_test_job")
     busy = bool(current_job and current_job["process"].poll() is None)
     if st.button(
@@ -288,7 +332,9 @@ def render_roi_editor(root: Path) -> None:
         disabled=busy or not (valid and is_mp4 and source and state["revision"] == state["saved_revision"]),
     ):
         output = new_job_dir(root, kind="ai_counting")
-        process = start_job(root, output, {camera: source}, max_frames=int(limit), session_only=True)
+        process = start_job(
+            root, output, {camera: source}, max_frames=int(limit), start_frame=int(start_frame), session_only=True
+        )
         st.session_state["roi_test_job"] = {"process": process, "output": output, "camera": camera}
         st.rerun()
     job = st.session_state.get("roi_test_job")

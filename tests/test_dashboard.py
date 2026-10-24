@@ -63,3 +63,41 @@ def test_dashboard_renders_completed_annotated_video(tmp_path: Path, monkeypatch
     assert not app.exception
     assert len(app.get("video")) == 1
     assert any(metric.label == "Lượt đếm AI" for metric in app.metric)
+
+
+def test_roi_editor_empty_zone_and_camera_drafts_survive_reruns(tmp_path: Path, monkeypatch) -> None:
+    from app import roi_editor
+
+    monkeypatch.setattr(requests, "request", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        requests.ConnectionError("API offline")
+    ))
+    video = tmp_path / "fixture.mp4"
+    writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"mp4v"), 5, (100, 100))
+    assert writer.isOpened()
+    for _ in range(3):
+        writer.write(np.zeros((100, 100, 3), dtype=np.uint8))
+    writer.release()
+    monkeypatch.setattr(roi_editor, "_select_source", lambda *_args: (str(video), True))
+    app = AppTest.from_file("app/dashboard.py").run(timeout=20)
+    assert not app.exception
+    next(button for button in app.button if button.label == "Xóa vùng").click().run(timeout=20)
+    assert not app.exception
+    assert app.session_state["roi_editor_front"]["zones"]["a"] == []
+    assert next(button for button in app.button if button.label == "Lưu ROI").disabled
+    camera = next(item for item in app.selectbox if item.label == "Camera")
+    camera.set_value("rear").run(timeout=20)
+    assert not app.exception
+    assert app.session_state["roi_editor_front"]["zones"]["a"] == []
+    assert app.session_state["roi_editor_rear"]["zones"]["a"]
+
+
+def test_roi_editor_missing_mp4_shows_error_without_dashboard_exception(tmp_path: Path, monkeypatch) -> None:
+    from app import roi_editor
+
+    monkeypatch.setattr(requests, "request", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        requests.ConnectionError("API offline")
+    ))
+    monkeypatch.setattr(roi_editor, "_select_source", lambda *_args: (str(tmp_path / "missing.mp4"), True))
+    app = AppTest.from_file("app/dashboard.py").run(timeout=20)
+    assert not app.exception
+    assert any("Không mở/đọc được MP4" in item.value for item in app.error)

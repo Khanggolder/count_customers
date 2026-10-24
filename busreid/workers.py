@@ -45,12 +45,15 @@ class DualCameraRunner:
         overlay: OverlayOptions | None,
         cancel_file: Path | None,
         stop_file: Path | None,
+        start_frame: int,
     ) -> PipelineResult:
         with self._lock:
             self.status[camera].state = "RUNNING"
         if self.cancel_event.is_set():
             raise RuntimeError("cancelled")
         options = {"max_frames": max_frames}
+        if start_frame:
+            options["start_frame"] = start_frame
         if recording_start_time is not None:
             options["recording_start_time"] = recording_start_time
         if overlay is not None:
@@ -73,6 +76,7 @@ class DualCameraRunner:
         overlay: OverlayOptions | None = None,
         cancel_file: Path | None = None,
         stop_file: Path | None = None,
+        start_frame: int = 0,
     ) -> DualCameraResult:
         valid = {
             camera: source for camera, source in sources.items() if source and camera in self.config.cameras
@@ -94,6 +98,7 @@ class DualCameraRunner:
                     overlay,
                     cancel_file,
                     stop_file,
+                    start_frame,
                 ): camera
                 for camera, source in valid.items()
             }
