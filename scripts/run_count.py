@@ -21,6 +21,7 @@ from backend.models import (  # noqa: E402
 from backend.schemas import TelemetryCreate  # noqa: E402
 from busreid.business import validate_passenger_direction  # noqa: E402
 from busreid.config import load_config  # noqa: E402
+from busreid.pipeline import OverlayOptions  # noqa: E402
 from busreid.service import detect_and_assign, flow_rows, validate_event_source  # noqa: E402
 from busreid.video import redact_source  # noqa: E402
 from busreid.workers import DualCameraRunner  # noqa: E402
@@ -72,6 +73,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--paired-verified", action="store_true", help="Only if same trip and time synchronization are proven"
     )
+    parser.add_argument("--cancel-file", type=Path, help="Local cancellation marker checked between frames")
+    for layer in ("boxes", "track-ids", "zones", "trajectory", "events"):
+        parser.add_argument(f"--hide-{layer}", action="store_true")
     args = parser.parse_args(argv)
     if not args.front and not args.rear:
         parser.error("Cần ít nhất --front hoặc --rear")
@@ -84,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--paired-verified requires both cameras and synchronized telemetry/capture time")
     Base.metadata.create_all(bind=engine)
     created = datetime.now(timezone.utc)
-    trip_id = args.trip_id or f"VIDEO-{created.strftime('%Y%m%dT%H%M%SZ')}"
+    trip_id = args.trip_id or f"VIDEO-{created.strftime('%Y%m%dT%H%M%S%fZ')}"
     with SessionLocal() as db:
         existing_trip = db.get(TripModel, trip_id)
         if existing_trip is not None:
@@ -99,7 +103,24 @@ def main(argv: list[str] | None = None) -> int:
                 ):
                     raise ValueError(f"Source mismatch for {camera}")
     runner = DualCameraRunner(config)
-    outcome = runner.run(sources, args.output, args.max_frames, recording_start_time=recording_start)
+    overlay = OverlayOptions(
+        boxes=not args.hide_boxes,
+        track_ids=not args.hide_track_ids,
+        zones=not args.hide_zones,
+        trajectory=not args.hide_trajectory,
+        events=not args.hide_events,
+    )
+    outcome = runner.run(
+        sources,
+        args.output,
+        args.max_frames,
+        recording_start_time=recording_start,
+        overlay=overlay,
+        cancel_file=args.cancel_file,
+    )
+    if outcome.cancelled:
+        print("Inference cancelled by operator", file=sys.stderr)
+        return 2
 
     with SessionLocal() as db:
         if db.get(RouteModel, "VIDEO-ONLY") is None:

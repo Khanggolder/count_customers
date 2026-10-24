@@ -80,6 +80,25 @@ Chạy API và dashboard trong hai PowerShell:
 
 Mở dashboard tại <http://localhost:8501> và Swagger tại <http://localhost:8000/docs>.
 
+### Xem AI Counting trực quan
+
+Trong tab **Hai cửa**, chọn **AI Video Lab**. Với mỗi camera có thể upload MP4, chọn đường dẫn MP4 trên máy hoặc nhập RTSP. Chỉ cần một nguồn FRONT hoặc REAR là chạy được; không cần tạo Trip hay GPS. Bấm **Chạy AI Counting**, xem preview annotated cập nhật khoảng mỗi 15 frame, frame/FPS/thời gian và bộ đếm của từng camera. Nút **Hủy inference** tạo yêu cầu dừng giữa các frame. Sau khi hoàn tất, video H.264 có thể phát bằng trình duyệt và timeline cho phép xem crop bằng chứng hoặc tua gần thời điểm event. Các lớp box, Track ID/confidence, ROI, trajectory và event có thể bật/tắt trước khi chạy.
+
+Để thử ngay sau khi tải clip Pexels:
+
+1. Khởi động API và Streamlit theo hai lệnh phía trên, mở `http://localhost:8501`.
+2. Vào **Hai cửa → AI Video Lab**. FRONT tự điền đường dẫn clip Pexels local, REAR chọn **Không dùng**.
+3. Đặt giới hạn 40 frame để chạy thử nhanh, bấm **Chạy AI Counting** và theo dõi preview, FPS, trạng thái.
+4. Khi báo COMPLETED, bấm Play trên video annotated. Thử upload MP4 khác hoặc thêm REAR để so sánh hai camera.
+
+AI Video Lab vẫn chạy khi FastAPI offline; khi đó sidebar báo API offline và các tab phụ thuộc Trip không tải dữ liệu.
+
+Nếu đã tải clip Pexels ở mục dưới, đường dẫn FRONT được chọn sẵn. Clip này quay ngoài xe và không có camera REAR hay nhãn crossing; 0 lượt tại ROI mặc định là kết quả AI thực của clip thử, **không** phải phép đo accuracy. Để trình diễn crossing có ý nghĩa cần MP4 đúng góc cửa và hiệu chỉnh `configs/cameras.yaml` cho chính video đó. Chế độ **Gắn với chuyến thật** giữ luồng telemetry/StopVisit cũ, chỉ cho chọn Trip không phải `SIMULATED`. Kết quả AI Video Lab được lưu là `REAL_VIDEO_AI`, `UNPAIRED`, `UNASSIGNED` khi thiếu telemetry đồng bộ; không ghép vào chuyến mô phỏng tám trạm.
+
+File output nằm trong `runs/video_lab/<run-id>/`: `front/rear_preview.jpg`, `front/rear_annotated.mp4`, `front/rear_events.csv`, progress JSON, crop bằng chứng và `run_summary.json`. Preview là ảnh định kỳ, **không phải RTSP live streaming**. Dashboard dùng `st.fragment` để cập nhật phần job mà không nạp lại model mỗi lần rerun; YOLO được nạp một lần trong mỗi worker camera của run. Upload Streamlit mặc định tối đa 200 MB; với file lớn, chọn đường dẫn MP4 trên máy.
+
+Video annotated được chuyển mã H.264/yuv420p/faststart bằng FFmpeg do `imageio-ffmpeg` cung cấp (hoặc `ffmpeg` trên PATH), sau đó kiểm tra codec, frame và khả năng mở. Nếu thiếu FFmpeg hoặc chuyển mã lỗi, job báo FAILED. Clip nguồn không có audio nên output không có AAC. `imageio-ffmpeg` là wrapper BSD; binary FFmpeg dùng `libx264` có điều kiện GPL riêng theo [FFmpeg Legal](https://ffmpeg.org/legal.html). Binary và video không được commit vào repository.
+
 ## Chạy video thật
 
 Tải clip Pexels đã xác minh license (không commit video vào Git):
@@ -140,7 +159,7 @@ Tạo trip thật qua `POST /trips` với một route/stop đã có; không dùn
 
 Lệnh dùng trip hiện có, tạo/kiểm tra `CameraSource`, chạy hai pipeline, nhập telemetry idempotent, phát hiện StopVisit, gán event và ghi `run_summary.json` + video annotated. `--telemetry-synchronized` là lời xác nhận của người vận hành, **không** phải thuật toán tự chứng minh đồng bộ. Event chỉ `AUTO_ASSIGNED` khi nguồn thuộc đúng trip/cửa, capture clock có neo thời gian, StopVisit confirmed và mẫu cửa tương ứng đang mở trong 2 giây trước event. Thiếu bằng chứng cửa thành `REVIEW_REQUIRED`; thiếu GPS/telemetry cùng nguồn hoặc không xác nhận đồng bộ thì `UNASSIGNED`. Public Pexels không có GPS cùng nguồn nên vẫn `UNASSIGNED`. Không dùng `--paired-verified` để ngụ ý coverage đầy đủ nếu chưa kiểm chứng; occupancy thật vẫn `N/A` khi `coverage_complete=false`.
 
-Dashboard tab **Hai cửa** cho chọn trip thật, FRONT/REAR, telemetry, capture start, xem progress theo frame và video annotated sau khi xong. Đây là subprocess cục bộ Windows; không dùng làm dịch vụ inference nhiều người dùng. Các endpoint `/runs` hiện chỉ lưu metadata, chưa phải job queue chạy inference. `runs/` và video không được commit.
+Dashboard tab **Hai cửa** cho chọn trip thật, FRONT/REAR, telemetry, capture start, xem preview/progress và video annotated H.264 sau khi xong. Đây là subprocess cục bộ Windows; không dùng làm dịch vụ inference nhiều người dùng. Các endpoint `/runs` hiện chỉ lưu metadata, chưa phải job queue chạy inference. `runs/` và video không được commit.
 
 Demo chính: `POST /demo/generate` có 8 trạm, 44 event synthetic (43 gán trạm, 1 UNASSIGNED), 18 khách lên/25 khách xuống, occupancy ban đầu 8 và cuối chuyến 1. Đối chứng lỗi riêng: `POST /demo/generate?kind=negative_occupancy`, occupancy ban đầu 0 và có cảnh báo âm. Cả hai đều không phải AI output. Schema v2 dùng trip ID `SIM-R01-v2-20261019-0800`; dữ liệu scenario v1 trong SQLite không bị xóa, replay v1 bị từ chối. Flow/export mới loại các event lịch sử FRONT-OUT/REAR-IN; cột cũ `front_out`/`rear_in` còn trong API để tương thích nhưng luôn 0 trong thống kê hợp lệ.
 

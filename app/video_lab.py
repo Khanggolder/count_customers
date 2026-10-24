@@ -1,0 +1,163 @@
+from __future__ import annotations
+
+import csv
+import json
+import subprocess
+import sys
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import BinaryIO
+
+import cv2
+
+
+def save_upload(upload: BinaryIO, filename: str, destination: Path) -> Path:
+    if Path(filename).suffix.lower() != ".mp4":
+        raise ValueError("Chỉ hỗ trợ upload MP4")
+    destination.mkdir(parents=True, exist_ok=True)
+    path = destination / f"{uuid.uuid4().hex}.mp4"
+    with path.open("wb") as output:
+        while block := upload.read(1024 * 1024):
+            output.write(block)
+    if path.stat().st_size == 0:
+        path.unlink()
+        raise ValueError("Video upload rỗng")
+    return path
+
+
+def resolve_source(
+    upload: BinaryIO | None, filename: str | None, path: str, rtsp: str, destination: Path
+) -> str | None:
+    selected = sum(bool(item) for item in (upload, path.strip(), rtsp.strip()))
+    if selected > 1:
+        raise ValueError("Mỗi camera chỉ chọn một nguồn: upload, đường dẫn hoặc RTSP")
+    if upload is not None:
+        return str(save_upload(upload, filename or "", destination))
+    if rtsp.strip():
+        if not rtsp.strip().lower().startswith(("rtsp://", "rtsps://")):
+            raise ValueError("Nguồn RTSP phải bắt đầu bằng rtsp:// hoặc rtsps://")
+        return rtsp.strip()
+    if path.strip():
+        selected_path = Path(path.strip()).expanduser()
+        if not selected_path.is_file() or selected_path.suffix.lower() != ".mp4":
+            raise ValueError(f"Không tìm thấy MP4: {selected_path}")
+        return str(selected_path.resolve())
+    return None
+
+
+def first_frame(path: str) -> bytes | None:
+    if path.lower().startswith(("rtsp://", "rtsps://")):
+        return None
+    capture = cv2.VideoCapture(path)
+    try:
+        ok, frame = capture.read()
+        if not ok:
+            return None
+        height, width = frame.shape[:2]
+        if width > 640:
+            frame = cv2.resize(frame, (640, round(height * 640 / width)))
+        encoded, image = cv2.imencode(".jpg", frame)
+        return image.tobytes() if encoded else None
+    finally:
+        capture.release()
+
+
+def new_job_dir(root: Path) -> Path:
+    output = (
+        root / "runs" / "video_lab" / f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S}_{uuid.uuid4().hex[:8]}"
+    )
+    output.mkdir(parents=True)
+    return output
+
+
+def start_job(
+    root: Path,
+    output: Path,
+    sources: dict[str, str],
+    *,
+    trip_id: str | None = None,
+    telemetry_file: str = "",
+    capture_start: str = "",
+    synchronized: bool = False,
+    max_frames: int = 0,
+    hidden_layers: set[str] | None = None,
+) -> subprocess.Popen:
+    if not sources:
+        raise ValueError("Chọn ít nhất một video FRONT hoặc REAR")
+    command = [
+        sys.executable,
+        str(root / "scripts" / "run_count.py"),
+        "--config",
+        str(root / "configs" / "cameras.yaml"),
+        "--output",
+        str(output),
+        "--cancel-file",
+        str(output / "cancel.request"),
+    ]
+    for camera, source in sources.items():
+        command.extend([f"--{camera}", source])
+    if trip_id:
+        command.extend(["--trip-id", trip_id])
+    if telemetry_file:
+        command.extend(["--telemetry-json", telemetry_file])
+    if capture_start:
+        command.extend(["--recording-start-time", capture_start])
+    if synchronized:
+        command.append("--telemetry-synchronized")
+    if max_frames:
+        command.extend(["--max-frames", str(max_frames)])
+    for layer in sorted(hidden_layers or set()):
+        command.append(f"--hide-{layer}")
+    log = (output / "process.log").open("w", encoding="utf-8")
+    try:
+        return subprocess.Popen(
+            command,
+            cwd=root,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    finally:
+        log.close()
+
+
+def camera_status(output: Path, camera: str, returncode: int | None) -> dict:
+    progress = output / f"{camera}_progress.json"
+    if progress.is_file():
+        try:
+            return json.loads(progress.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {
+        "status": "QUEUED" if returncode is None else "CANCELLED" if returncode == 2 else "FAILED",
+        "frames": 0,
+        "events": 0,
+        "counts": {},
+        "total_frames": None,
+        "elapsed_s": 0.0,
+        "processing_fps": 0.0,
+    }
+
+
+def event_timeline(output: Path, cameras: list[str]) -> list[dict]:
+    rows = []
+    for camera in cameras:
+        path = output / f"{camera}_events.csv"
+        if path.is_file():
+            with path.open(newline="", encoding="utf-8-sig") as handle:
+                for row in csv.DictReader(handle):
+                    rows.append(
+                        {
+                            "timestamp": row["capture_time_utc"] or f"{float(row['timestamp_s']):.2f}s video",
+                            "camera": camera.upper(),
+                            "track_id": row["track_id"],
+                            "direction": row["direction"],
+                            "frame_index": int(row["frame_index"]),
+                            "confidence": row["confidence"],
+                            "event_status": "UNASSIGNED",
+                            "timestamp_s": float(row["timestamp_s"]),
+                            "crop_path": row["crop_path"],
+                        }
+                    )
+    return sorted(rows, key=lambda row: (row["timestamp_s"], row["camera"]))

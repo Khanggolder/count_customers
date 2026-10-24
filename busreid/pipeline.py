@@ -4,6 +4,7 @@ import csv
 import json
 import logging
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ from .quality import QualitySelector
 from .timebase import SourceClock
 from .types import CrossingEvent, Detection
 from .video import OpenCVVideoSource, VideoMetadata, redact_source
+from .video_output import make_browser_video, validate_video
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,25 @@ class PipelineResult:
     peak_vram_mb: float | None
 
 
+@dataclass(slots=True)
+class OverlayOptions:
+    boxes: bool = True
+    track_ids: bool = True
+    zones: bool = True
+    trajectory: bool = True
+    events: bool = True
+
+
+class PipelineCancelled(RuntimeError):
+    pass
+
+
+def _write_progress(path: Path, **values: object) -> None:
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(values), encoding="utf-8")
+    temporary.replace(path)
+
+
 def _scale_polygon(points: list[tuple[float, float]], shape: tuple[int, ...]) -> np.ndarray:
     height, width = shape[:2]
     return np.asarray([(int(x * width), int(y * height)) for x, y in points], dtype=np.int32)
@@ -49,35 +70,92 @@ def annotate_frame(
     detections: list[Detection],
     camera: CameraConfig,
     counts: dict[str, int],
+    *,
+    options: OverlayOptions | None = None,
+    trails: dict[str, deque[tuple[int, int]]] | None = None,
+    frame_events: list[CrossingEvent] | None = None,
 ) -> np.ndarray:
+    options = options or OverlayOptions()
     output = frame.copy()
-    cv2.polylines(output, [_scale_polygon(camera.zone_a, frame.shape)], True, (0, 200, 255), 2)
-    cv2.polylines(output, [_scale_polygon(camera.zone_b, frame.shape)], True, (255, 180, 0), 2)
-    for detection in detections:
-        x1, y1, x2, y2 = detection.bbox
-        cv2.rectangle(output, (x1, y1), (x2, y2), (30, 220, 90), 2)
+    scale = max(1.0, min(frame.shape[1] / 960, frame.shape[0] / 540))
+    stroke = max(2, round(2 * scale))
+    origin = round(10 * scale)
+    highlighted = {item.track_id for item in frame_events or []} if options.events else set()
+    if options.zones:
+        for label, polygon, color in (
+            ("A", camera.zone_a, (0, 200, 255)),
+            ("B", camera.zone_b, (255, 180, 0)),
+        ):
+            contour = _scale_polygon(polygon, frame.shape)
+            cv2.polylines(output, [contour], True, color, stroke)
+            center = np.mean(contour, axis=0).astype(int)
+            cv2.putText(
+                output, f"ZONE {label}", tuple(center), cv2.FONT_HERSHEY_SIMPLEX, 0.65 * scale, color, stroke
+            )
         cv2.putText(
             output,
-            f"{detection.track_id} {detection.confidence:.2f}",
-            (x1, max(y1 - 8, 18)),
+            "VALID: A -> B",
+            (origin, frame.shape[0] - round(12 * scale)),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            (30, 220, 90),
-            1,
-            cv2.LINE_AA,
+            0.55 * scale,
+            (255, 255, 255),
+            stroke,
         )
-    cv2.rectangle(output, (0, 0), (440, 42), (10, 17, 30), -1)
+    for detection in detections:
+        x1, y1, x2, y2 = detection.bbox
+        color = (0, 255, 255) if detection.track_id in highlighted else (30, 220, 90)
+        if options.boxes:
+            cv2.rectangle(output, (x1, y1), (x2, y2), color, stroke)
+        if options.track_ids:
+            track_label = f"{detection.track_id}  {detection.confidence:.2f}"
+            font_scale = 0.45 * scale
+            label_width = cv2.getTextSize(
+                track_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, max(1, round(scale))
+            )[0][0]
+            cv2.putText(
+                output,
+                track_label,
+                (
+                    max(0, min(x1, frame.shape[1] - label_width - 2)),
+                    max(y1 - round(8 * scale), round(18 * scale)),
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                color,
+                max(1, round(scale)),
+                cv2.LINE_AA,
+            )
+        anchor = tuple(int(value) for value in detection.anchor(camera.anchor_mode))
+        cv2.circle(output, anchor, round(5 * scale), color, -1)
+        if options.trajectory and trails and len(trails.get(detection.track_id, ())) > 1:
+            points = np.asarray(trails[detection.track_id], dtype=np.int32)
+            cv2.polylines(output, [points], False, color, stroke)
+    cv2.rectangle(
+        output, (0, 0), (min(frame.shape[1], round(530 * scale)), round(42 * scale)), (10, 17, 30), -1
+    )
     label = "FRONT - BOARDING / IN" if camera.name.lower() == "front" else "REAR - ALIGHTING / OUT"
     cv2.putText(
         output,
         f"{label}: {counts[camera.event_direction.value]}",
-        (10, 28),
+        (origin, round(28 * scale)),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
+        0.7 * scale,
         (255, 255, 255),
-        2,
+        stroke,
         cv2.LINE_AA,
     )
+    if options.events and frame_events:
+        cv2.putText(
+            output,
+            f"+{len(frame_events)} {camera.event_direction.value}  "
+            + ", ".join(item.track_id for item in frame_events[:2]),
+            (origin, min(frame.shape[0] - round(30 * scale), round(78 * scale))),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8 * scale,
+            (0, 255, 255),
+            stroke,
+            cv2.LINE_AA,
+        )
     return output
 
 
@@ -94,7 +172,8 @@ def _write_events(path: Path, events: list[CrossingEvent]) -> None:
         "created_at",
         "capture_time_utc",
     ]
-    with path.open("w", newline="", encoding="utf-8-sig") as handle:
+    temporary = path.with_suffix(".csv.tmp")
+    with temporary.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for event in events:
@@ -103,6 +182,7 @@ def _write_events(path: Path, events: list[CrossingEvent]) -> None:
             row["created_at"] = event.created_at.isoformat()
             row["capture_time_utc"] = event.capture_time_utc.isoformat() if event.capture_time_utc else ""
             writer.writerow(row)
+    temporary.replace(path)
 
 
 class CameraPipeline:
@@ -131,6 +211,8 @@ class CameraPipeline:
         max_frames: int | None = None,
         on_event: Callable[[CrossingEvent, list[np.ndarray]], None] | None = None,
         recording_start_time: datetime | None = None,
+        overlay: OverlayOptions | None = None,
+        cancel_file: Path | None = None,
     ) -> PipelineResult:
         destination = Path(output_dir)
         destination.mkdir(parents=True, exist_ok=True)
@@ -139,33 +221,45 @@ class CameraPipeline:
         clock = SourceClock(recording_start_time or datetime.now(timezone.utc), self.camera.time_offset_ms)
         generation = source.generation
         annotated = destination / f"{self.camera.name}_annotated.mp4"
+        intermediate = destination / f"{self.camera.name}_encoding.mp4"
         events_file = destination / f"{self.camera.name}_events.csv"
         writer = cv2.VideoWriter(
-            str(annotated),
+            str(intermediate),
             cv2.VideoWriter_fourcc(*"mp4v"),
             metadata.fps,
             (metadata.width, metadata.height),
         )
         if not writer.isOpened():
             source.close()
-            raise RuntimeError(f"Không tạo được video output: {annotated}")
+            raise RuntimeError(f"Không tạo được video output: {intermediate}")
         events: list[CrossingEvent] = []
         counts = {"IN": 0, "OUT": 0}
         progress_path = destination / f"{self.camera.name}_progress.json"
         frame_index = 0
+        trails: dict[str, deque[tuple[int, int]]] = {}
         device_name = "CPU"
         peak_vram_mb: float | None = None
-        try:
+        if isinstance(self.detector, PersonDetector):
             import torch
 
             if torch.cuda.is_available():
                 torch.cuda.reset_peak_memory_stats()
                 device_name = torch.cuda.get_device_name(0)
-        except ImportError:
-            pass
         started = time.perf_counter()
+        _write_progress(
+            progress_path,
+            frames=0,
+            total_frames=metadata.frame_count,
+            events=0,
+            counts=counts,
+            elapsed_s=0.0,
+            processing_fps=0.0,
+            status="RUNNING",
+        )
         try:
             while max_frames is None or frame_index < max_frames:
+                if cancel_file and cancel_file.is_file():
+                    raise PipelineCancelled("Inference cancelled by operator")
                 ok, frame, timestamp_s = source.read()
                 if not ok or frame is None:
                     break
@@ -174,7 +268,10 @@ class CameraPipeline:
                     generation = source.generation
                 capture_time = clock.map_pts(timestamp_s)
                 detections = self.detector.track(frame)
+                frame_events: list[CrossingEvent] = []
                 for detection in detections:
+                    trail = trails.setdefault(detection.track_id, deque(maxlen=25))
+                    trail.append(tuple(int(value) for value in detection.anchor(self.camera.anchor_mode)))
                     self.quality.consider(frame, detection, frame_index)
                     event = self.counter.update(detection, frame.shape, frame_index, timestamp_s)
                     if event is not None:
@@ -191,45 +288,105 @@ class CameraPipeline:
                             event.crop_path = str(crop_path)
                         counts[event.direction.value] += 1
                         events.append(event)
+                        frame_events.append(event)
+                        _write_events(events_file, events)
                         if on_event:
                             on_event(event, crops)
                 self.counter.prune_stale(frame_index)
-                writer.write(annotate_frame(frame, detections, self.camera, counts))
+                active = set(self.counter.states)
+                trails = {key: value for key, value in trails.items() if key in active}
+                annotated_frame = annotate_frame(
+                    frame,
+                    detections,
+                    self.camera,
+                    counts,
+                    options=overlay,
+                    trails=trails,
+                    frame_events=frame_events,
+                )
+                writer.write(annotated_frame)
                 frame_index += 1
-                if frame_index % 10 == 0:
-                    progress_path.write_text(
-                        json.dumps(
-                            {
-                                "frames": frame_index,
-                                "total_frames": metadata.frame_count,
-                                "events": len(events),
-                                "status": "RUNNING",
-                            }
-                        ),
-                        encoding="utf-8",
+                if frame_index == 1 or frame_index % 15 == 0 or frame_events:
+                    preview = destination / f"{self.camera.name}_preview.jpg"
+                    temporary = preview.with_suffix(".tmp.jpg")
+                    display_frame = annotated_frame
+                    if annotated_frame.shape[1] > 1280:
+                        width = annotated_frame.shape[1]
+                        display_frame = cv2.resize(
+                            annotated_frame, (1280, round(annotated_frame.shape[0] * 1280 / width))
+                        )
+                    if cv2.imwrite(str(temporary), display_frame):
+                        temporary.replace(preview)
+                if frame_index % 10 == 0 or frame_events:
+                    elapsed_now = time.perf_counter() - started
+                    _write_progress(
+                        progress_path,
+                        frames=frame_index,
+                        total_frames=metadata.frame_count,
+                        events=len(events),
+                        counts=counts,
+                        elapsed_s=elapsed_now,
+                        processing_fps=frame_index / elapsed_now if elapsed_now else 0.0,
+                        status="RUNNING",
                     )
+        except PipelineCancelled:
+            _write_progress(
+                progress_path,
+                frames=frame_index,
+                total_frames=metadata.frame_count,
+                events=len(events),
+                counts=counts,
+                elapsed_s=time.perf_counter() - started,
+                processing_fps=0.0,
+                status="CANCELLED",
+            )
+            raise
+        except Exception:
+            _write_progress(
+                progress_path,
+                frames=frame_index,
+                total_frames=metadata.frame_count,
+                events=len(events),
+                counts=counts,
+                elapsed_s=time.perf_counter() - started,
+                processing_fps=0.0,
+                status="FAILED",
+            )
+            raise
         finally:
             writer.release()
             source.close()
         elapsed = time.perf_counter() - started
         try:
+            validate_video(intermediate, frame_index)
+            make_browser_video(intermediate, annotated, frame_index)
+        except Exception:
+            _write_progress(
+                progress_path,
+                frames=frame_index,
+                total_frames=metadata.frame_count,
+                events=len(events),
+                counts=counts,
+                elapsed_s=elapsed,
+                processing_fps=frame_index / elapsed if elapsed else 0.0,
+                status="FAILED",
+            )
+            raise
+        if isinstance(self.detector, PersonDetector):
             import torch
 
             if torch.cuda.is_available():
                 peak_vram_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
-        except ImportError:
-            pass
         _write_events(events_file, events)
-        progress_path.write_text(
-            json.dumps(
-                {
-                    "frames": frame_index,
-                    "total_frames": metadata.frame_count,
-                    "events": len(events),
-                    "status": "COMPLETED",
-                }
-            ),
-            encoding="utf-8",
+        _write_progress(
+            progress_path,
+            frames=frame_index,
+            total_frames=metadata.frame_count,
+            events=len(events),
+            counts=counts,
+            elapsed_s=elapsed,
+            processing_fps=frame_index / elapsed if elapsed else 0.0,
+            status="COMPLETED",
         )
         result = PipelineResult(
             camera=self.camera.name,
