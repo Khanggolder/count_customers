@@ -5,6 +5,7 @@
 
 - Chưa có hai video FRONT/REAR cố định trên cùng xe, cùng chuyến và đồng bộ với GPS/cửa. Kiến trúc hai worker đã test bằng fake pipeline; chưa soak-test RTSP vật lý.
 - Clip Pexels có license rõ nhưng camera ngoài xe chuyển động, không đúng hình học camera gắn cao tại cửa. Kết quả 0 crossing phản ánh ROI/góc quay không phù hợp, không phải accuracy.
+- ROI Editor đã có test phần mềm cho click/dời, xóa/reset, MP4 seek và lỗi capture qua mock/AppTest. Kéo thả đỉnh và quy trình click trong trình duyệt cần kiểm tra thực tế theo checklist trong `README.md`; không coi AppTest là browser E2E. Timeout RTSP phụ thuộc backend OpenCV/FFmpeg và chưa soak-test với camera vật lý.
 - PCDS chưa tải được từ BaiYun; không có count ground truth đúng clip. `MAE`, precision và recall AI là `N/A`.
 - Tọa độ scenario là synthetic. Tên/thứ tự tám trạm lấy từ nguồn bên thứ ba; endpoint chính thức trả 403, nên route/stops được đánh `verified=false`.
 - Door signal trong demo là simulated structured telemetry. Chưa xác minh camera của stakeholder có door sensor/API; OCR/CV door-state chỉ là hướng mở rộng.

@@ -55,6 +55,7 @@ class OpenCVVideoSource(VideoSource):
         self.frame_index = 0
         self.generation = 0
         self._pts_origin_s: float | None = None
+        self._pending: tuple[np.ndarray, float] | None = None
 
     @property
     def is_rtsp(self) -> bool:
@@ -83,6 +84,7 @@ class OpenCVVideoSource(VideoSource):
         self.metadata = VideoMetadata(source_type, width, height, fps, count, duration)
         self.frame_index = 0
         self._pts_origin_s = None
+        self._pending = None
         return self.metadata
 
     def _reconnect(self) -> bool:
@@ -100,14 +102,56 @@ class OpenCVVideoSource(VideoSource):
                 logger.warning("RTSP reconnect lần %d thất bại", attempt + 1)
         return False
 
+    def seek(self, frame_index: int) -> None:
+        """Position an MP4 at an absolute frame, falling back to exact sequential decode."""
+        if self.capture is None or self.metadata is None:
+            raise RuntimeError("Nguồn video chưa open")
+        if self.metadata.source_type != "mp4":
+            raise ValueError("Chỉ MP4 hỗ trợ chọn frame bắt đầu")
+        if frame_index < 0 or (self.metadata.frame_count is not None and frame_index >= self.metadata.frame_count):
+            raise ValueError("Frame bắt đầu vượt quá tổng số frame của video")
+        positioned = self.capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+        reported = self.capture.get(cv2.CAP_PROP_POS_FRAMES) if positioned else -1
+        if positioned and abs(reported - frame_index) < 0.5:
+            ok, frame = self.capture.read()
+            after = self.capture.get(cv2.CAP_PROP_POS_FRAMES)
+            if ok and frame is not None and abs(after - (frame_index + 1)) < 0.5:
+                position_ms = self.capture.get(cv2.CAP_PROP_POS_MSEC)
+                timestamp = position_ms / 1000 if position_ms > 0 else frame_index / self.metadata.fps
+                self._pending = (frame, timestamp)
+                self.frame_index = frame_index
+                return
+        # Some codecs/backends report an earlier keyframe or reject random access.
+        # Reopen and decode/discard to guarantee the requested absolute frame.
+        self.close()
+        self.open()
+        assert self.capture is not None
+        for _ in range(frame_index):
+            ok, _ = self.capture.read()
+            if not ok:
+                raise ValueError("Không thể tìm đến frame bắt đầu trong video")
+        ok, frame = self.capture.read()
+        if not ok or frame is None:
+            raise ValueError("Không thể đọc frame bắt đầu trong video")
+        position_ms = self.capture.get(cv2.CAP_PROP_POS_MSEC)
+        timestamp = position_ms / 1000 if position_ms > 0 else frame_index / self.metadata.fps
+        self._pending = (frame, timestamp)
+        self.frame_index = frame_index
+
     def read(self) -> tuple[bool, np.ndarray | None, float]:
         if self.capture is None or self.metadata is None:
             raise RuntimeError("Nguồn video chưa open")
+        if self._pending is not None:
+            frame, timestamp_s = self._pending
+            self._pending = None
+            self.frame_index += 1
+            return True, frame, timestamp_s
+        absolute_index = self.frame_index
         ok, frame = self.capture.read()
         if not ok and self._reconnect():
             assert self.capture is not None
             ok, frame = self.capture.read()
-        timestamp_s = self.frame_index / self.metadata.fps
+        timestamp_s = absolute_index / self.metadata.fps
         if ok:
             position_ms = self.capture.get(cv2.CAP_PROP_POS_MSEC)
             if position_ms > 0:

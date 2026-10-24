@@ -134,6 +134,10 @@ def test_source_webcam_and_session_command_isolated(tmp_path: Path, monkeypatch)
         return SimpleNamespace(poll=lambda: None)
 
     monkeypatch.setattr("app.video_lab.subprocess.Popen", fake_popen)
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "cameras.yaml").write_bytes(
+        (Path(__file__).parents[1] / "configs" / "cameras.yaml").read_bytes()
+    )
     start_job(tmp_path, tmp_path, {"rear": "webcam:0"}, session_only=True)
     command = called[0]
     assert "run_count_session.py" in " ".join(command)

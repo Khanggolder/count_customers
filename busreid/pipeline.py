@@ -100,6 +100,8 @@ def annotate_frame(
             ("A", camera.zone_a, (0, 200, 255)),
             ("B", camera.zone_b, (255, 180, 0)),
         ):
+            if len(polygon) < 3:
+                continue
             contour = _scale_polygon(polygon, frame.shape)
             cv2.polylines(output, [contour], True, color, stroke)
             center = np.mean(contour, axis=0).astype(int)
@@ -229,11 +231,22 @@ class CameraPipeline:
         overlay: OverlayOptions | None = None,
         cancel_file: Path | None = None,
         stop_file: Path | None = None,
+        start_frame: int = 0,
     ) -> PipelineResult:
         destination = Path(output_dir)
         destination.mkdir(parents=True, exist_ok=True)
         source = OpenCVVideoSource(source_path)
         metadata = source.open()
+        try:
+            if start_frame < 0:
+                raise ValueError("Frame bắt đầu phải không âm")
+            if start_frame:
+                source.seek(start_frame)
+        except Exception:
+            source.close()
+            raise
+        available_frames = metadata.frame_count - start_frame if metadata.frame_count is not None else None
+        total_frames = min(max_frames, available_frames) if max_frames and available_frames is not None else available_frames or max_frames
         clock = SourceClock(recording_start_time or datetime.now(timezone.utc), self.camera.time_offset_ms)
         generation = source.generation
         annotated = destination / f"{self.camera.name}_annotated.mp4"
@@ -251,7 +264,8 @@ class CameraPipeline:
         events: list[CrossingEvent] = []
         counts = {"IN": 0, "OUT": 0}
         progress_path = destination / f"{self.camera.name}_progress.json"
-        frame_index = 0
+        frame_index = start_frame
+        processed_frames = 0
         trails: dict[str, deque[tuple[int, int]]] = {}
         recent_events: list[tuple[CrossingEvent, int]] = []
         stopped = False
@@ -267,7 +281,9 @@ class CameraPipeline:
         _write_progress(
             progress_path,
             frames=0,
-            total_frames=metadata.frame_count,
+            total_frames=total_frames,
+            start_frame=start_frame,
+            next_frame_index=start_frame,
             events=0,
             counts=counts,
             elapsed_s=0.0,
@@ -275,7 +291,7 @@ class CameraPipeline:
             status="RUNNING",
         )
         try:
-            while max_frames is None or frame_index < max_frames:
+            while max_frames is None or processed_frames < max_frames:
                 if cancel_file and cancel_file.is_file():
                     raise PipelineCancelled("Inference cancelled by operator")
                 if stop_file and stop_file.is_file():
@@ -334,7 +350,8 @@ class CameraPipeline:
                 )
                 writer.write(annotated_frame)
                 frame_index += 1
-                if frame_index == 1 or frame_index % 15 == 0 or frame_events:
+                processed_frames += 1
+                if processed_frames == 1 or processed_frames % 15 == 0 or frame_events:
                     preview = destination / f"{self.camera.name}_preview.jpg"
                     temporary = preview.with_suffix(".tmp.jpg")
                     display_frame = annotated_frame
@@ -349,23 +366,25 @@ class CameraPipeline:
                         except PermissionError:
                             logger.warning("Preview file temporarily locked: %s", preview)
                             temporary.unlink(missing_ok=True)
-                if frame_index % 10 == 0 or frame_events:
+                if processed_frames % 10 == 0 or frame_events:
                     elapsed_now = time.perf_counter() - started
                     _write_progress(
                         progress_path,
-                        frames=frame_index,
-                        total_frames=metadata.frame_count,
+                        frames=processed_frames,
+                        total_frames=total_frames,
+                        start_frame=start_frame,
+                        next_frame_index=frame_index,
                         events=len(events),
                         counts=counts,
                         elapsed_s=elapsed_now,
-                        processing_fps=frame_index / elapsed_now if elapsed_now else 0.0,
+                        processing_fps=processed_frames / elapsed_now if elapsed_now else 0.0,
                         status="RUNNING",
                     )
         except PipelineCancelled:
             _write_progress(
                 progress_path,
-                frames=frame_index,
-                total_frames=metadata.frame_count,
+                frames=processed_frames,
+                total_frames=total_frames,
                 events=len(events),
                 counts=counts,
                 elapsed_s=time.perf_counter() - started,
@@ -376,8 +395,8 @@ class CameraPipeline:
         except Exception:
             _write_progress(
                 progress_path,
-                frames=frame_index,
-                total_frames=metadata.frame_count,
+                frames=processed_frames,
+                total_frames=total_frames,
                 events=len(events),
                 counts=counts,
                 elapsed_s=time.perf_counter() - started,
@@ -390,9 +409,9 @@ class CameraPipeline:
             source.close()
         elapsed = time.perf_counter() - started
         try:
-            if frame_index:
-                validate_video(intermediate, frame_index)
-                make_browser_video(intermediate, annotated, frame_index)
+            if processed_frames:
+                validate_video(intermediate, processed_frames)
+                make_browser_video(intermediate, annotated, processed_frames)
             elif not stopped:
                 raise RuntimeError("Nguồn video không cung cấp frame nào")
             else:
@@ -400,12 +419,12 @@ class CameraPipeline:
         except Exception:
             _write_progress(
                 progress_path,
-                frames=frame_index,
-                total_frames=metadata.frame_count,
+                frames=processed_frames,
+                total_frames=total_frames,
                 events=len(events),
                 counts=counts,
                 elapsed_s=elapsed,
-                processing_fps=frame_index / elapsed if elapsed else 0.0,
+                processing_fps=processed_frames / elapsed if elapsed else 0.0,
                 status="FAILED",
             )
             raise
@@ -417,12 +436,14 @@ class CameraPipeline:
         _write_events(events_file, events)
         _write_progress(
             progress_path,
-            frames=frame_index,
-            total_frames=metadata.frame_count,
+            frames=processed_frames,
+            total_frames=total_frames,
+            start_frame=start_frame,
+            next_frame_index=frame_index,
             events=len(events),
             counts=counts,
             elapsed_s=elapsed,
-            processing_fps=frame_index / elapsed if elapsed else 0.0,
+            processing_fps=processed_frames / elapsed if elapsed else 0.0,
             status="STOPPED" if stopped else "COMPLETED",
         )
         result = PipelineResult(
@@ -431,9 +452,9 @@ class CameraPipeline:
             annotated_path=str(annotated),
             events_path=str(events_file),
             events=events,
-            frames=frame_index,
+            frames=processed_frames,
             elapsed_s=elapsed,
-            processing_fps=frame_index / elapsed if elapsed else 0.0,
+            processing_fps=processed_frames / elapsed if elapsed else 0.0,
             metadata=metadata,
             device=device_name,
             peak_vram_mb=peak_vram_mb,
@@ -448,6 +469,8 @@ class CameraPipeline:
                     "annotated_path": result.annotated_path,
                     "events_path": result.events_path,
                     "frames": result.frames,
+                    "start_frame": start_frame,
+                    "next_frame_index": frame_index,
                     "elapsed_s": result.elapsed_s,
                     "processing_fps": result.processing_fps,
                     "device": result.device,
