@@ -100,6 +100,8 @@ def annotate_frame(
             ("A", camera.zone_a, (0, 200, 255)),
             ("B", camera.zone_b, (255, 180, 0)),
         ):
+            if len(polygon) < 3:
+                continue
             contour = _scale_polygon(polygon, frame.shape)
             cv2.polylines(output, [contour], True, color, stroke)
             center = np.mean(contour, axis=0).astype(int)

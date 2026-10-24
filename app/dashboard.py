@@ -11,6 +11,7 @@ import streamlit as st
 
 from app.camera_view import render_camera_tab
 from app.counting_tab import render_counting_tab
+from app.roi_editor import render_roi_editor
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "configs" / "cameras.yaml"
@@ -45,12 +46,15 @@ trips = api("GET", "/trips") if health else []
 trip_ids = [item["trip_id"] for item in trips or []]
 selected_trip = st.sidebar.selectbox("Chuyến", trip_ids) if trip_ids else None
 
-counting_tab, overview_tab, cameras_tab, stops_tab, events_tab, demo_tab, settings_tab = st.tabs(
-    ["Đếm khách AI", "Tổng quan chuyến", "Hai cửa", "Trạm & bản đồ", "Sự kiện & kiểm thử", "Demo mẫu", "Cài đặt"]
+counting_tab, roi_tab, overview_tab, cameras_tab, stops_tab, events_tab, demo_tab, settings_tab = st.tabs(
+    ["Đếm khách AI", "Thiết lập vùng đếm (ROI)", "Tổng quan chuyến", "Hai cửa", "Trạm & bản đồ", "Sự kiện & kiểm thử", "Demo mẫu", "Cài đặt"]
 )
 
 with counting_tab:
     render_counting_tab(ROOT)
+
+with roi_tab:
+    render_roi_editor(ROOT)
 
 with overview_tab:
     if not selected_trip:

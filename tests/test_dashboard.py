@@ -20,6 +20,7 @@ def test_dashboard_keeps_six_original_tabs_and_new_counting_empty_state(monkeypa
     assert not app.exception
     assert [tab.label for tab in app.tabs] == [
         "Đếm khách AI",
+        "Thiết lập vùng đếm (ROI)",
         "Tổng quan chuyến",
         "Hai cửa",
         "Trạm & bản đồ",

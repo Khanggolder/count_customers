@@ -29,7 +29,7 @@ MVP không nhận diện danh tính, Re-ID, dự báo hay điều hành xe. Nó 
 Yêu cầu: Windows 11, Python 3.11, Git; NVIDIA driver tương thích nếu dùng GPU. Clone nhánh MVP và vào thư mục repository:
 
 ```powershell
-git clone --branch feature/busstop-flow-ai https://github.com/Khanggolder/count_customers.git busstop-flow-ai
+git clone --branch main https://github.com/Khanggolder/count_customers.git busstop-flow-ai
 cd busstop-flow-ai
 ```
 
@@ -80,6 +80,17 @@ Chạy API và dashboard trong hai PowerShell:
 
 Mở dashboard tại <http://localhost:8501> và Swagger tại <http://localhost:8000/docs>.
 
+### Thiết lập vùng đếm (ROI) trên Dashboard
+
+Không cần Roboflow hay sửa YAML bằng tay. Chạy Streamlit như phần trên, mở tab **Thiết lập vùng đếm (ROI)** (không cần API):
+
+1. Chọn **FRONT** hoặc **REAR**. Chọn MP4 trong `data/raw`, upload MP4, nhập đường dẫn MP4, hoặc bấm lấy một frame từ webcam/RTSP được cấp phép. Với MP4, dùng thanh trượt để chọn frame bất kỳ. Camera trực tiếp chỉ dùng để lấy frame hiệu chỉnh; URL RTSP không được ghi vào YAML.
+2. Chọn Zone A hoặc B và **Thêm đỉnh**; click các góc trên ảnh theo thứ tự quanh vùng. Chọn **Dời đỉnh** rồi kéo đỉnh tới vị trí mới, hoặc chọn đỉnh trong danh sách và click đích. Có nút xóa đỉnh, hoàn tác, xóa cả vùng và nạp lại cấu hình hiện tại. Bảng dưới ảnh hiển thị tọa độ pixel của frame gốc và normalized `[0, 1]`.
+3. Chỉ khi hai polygon có ít nhất ba đỉnh, nằm trong frame, không tự cắt và không chồng lấn, nút **Lưu ROI** mới khả dụng. Bản lưu cập nhật đúng camera trong `configs/cameras.yaml`, tạo `configs/cameras.yaml.bak` để khôi phục (file backup không commit). Nút **Khôi phục bản sao lưu** phục hồi cấu hình trước lần lưu gần nhất. Hãy kiểm tra chiều A → B trên mũi tên: FRONT = IN, REAR = OUT; không đổi chiều nghiệp vụ bằng cách vẽ ngược.
+4. Bấm **Test ROI** với MP4 và giới hạn số frame (mặc định 90) sau khi lưu. Worker dùng YOLO11n + ByteTrack thật; xem progress, frame annotated và tải CSV crossing. Bấm cập nhật tiến độ nếu job đang chạy. Sau đó sang tab **Đếm khách AI**, chọn video và bắt đầu phiên inference mới; phiên này đọc ngay ROI vừa lưu. Worker đã chạy giữ ROI được nạp lúc khởi động, không đổi giữa chừng.
+
+Ảnh preview vùng dùng cùng `annotate_frame` của pipeline đếm, cộng màu phủ A/B và mũi tên để dễ hiệu chỉnh. Event trong **Test ROI** là output AI trên đoạn MP4, không phải ground truth hay chỉ số accuracy. Video/camera chưa có nhãn thủ công thì accuracy vẫn **N/A**. Nên chọn frame nơi cửa, lối đi và hướng chuyển động đều rõ; tránh vùng A/B chạm nhau hoặc chứa người đứng yên lâu.
+
 ### Xem AI Counting trực quan
 
 Tab **Đếm khách AI** là đường demo ngắn nhất và không cần FastAPI, Trip hay GPS:
@@ -89,7 +100,7 @@ Tab **Đếm khách AI** là đường demo ngắn nhất và không cần FastA
 3. Nhấn **Bắt đầu đếm**. Preview là frame YOLO + ByteTrack đã xử lý (box, Track ID/confidence, điểm neo, Zone A/B, hướng và số lượt), cập nhật theo frame thực. MP4 là **video phát lại**, không phải camera live. Chỉ crossing A→B tạo FRONT-IN hoặc REAR-OUT; bộ đếm không tăng theo thời gian.
 4. **Dừng đếm** yêu cầu worker kết thúc sau frame hiện tại, giải phóng nguồn và xuất video H.264 của phần đã xử lý. Sau khi worker dừng, **Đặt lại bộ đếm** chỉ xóa phiên trên màn hình, không xóa file. Kết thúc tự nhiên hiển thị cùng loại kết quả.
 
-Kết quả ở `runs/ai_counting/<session-id>/`: `front/rear_preview.jpg`, `front/rear_annotated.mp4`, `front/rear_events.csv`, `front/rear_progress.json`, `session_summary.json`. Mỗi camera có trạng thái và lỗi riêng; camera không chọn hiển thị “Chưa kết nối”, không coi 0 là quan sát. Phiên này **không tạo Trip, telemetry, StopVisit hoặc gán trạm**. Số liệu là output AI thực trên video được chọn, không phải độ chính xác; accuracy là N/A khi chưa có ground truth. ROI lấy từ `configs/cameras.yaml` và cần hiệu chỉnh theo góc quay. Không có webcam/RTSP vật lý trong test tự động.
+Kết quả ở `runs/ai_counting/<session-id>/`: `front/rear_preview.jpg`, `front/rear_annotated.mp4`, `front/rear_events.csv`, `front/rear_progress.json`, `session_summary.json`. Mỗi camera có trạng thái và lỗi riêng; camera không chọn hiển thị “Chưa kết nối”, không coi 0 là quan sát. Phiên này **không tạo Trip, telemetry, StopVisit hoặc gán trạm**. Số liệu là output AI thực trên video được chọn, không phải độ chính xác; accuracy là N/A khi chưa có ground truth. ROI lấy từ `configs/cameras.yaml`; có thể hiệu chỉnh ngay trong tab **Thiết lập vùng đếm (ROI)**. Không có webcam/RTSP vật lý trong test tự động.
 
 Tab **Hai cửa** dưới đây vẫn giữ luồng cũ cho AI Video Lab và Trip đã xác minh:
 

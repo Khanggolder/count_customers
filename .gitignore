@@ -48,4 +48,6 @@ runs/*
 *.pem
 *.key
 *.log
+configs/*.yaml.bak
+configs/*.yaml.tmp
 

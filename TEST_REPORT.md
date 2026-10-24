@@ -1,5 +1,11 @@
 # Báo cáo kiểm thử BusStop Flow AI
 
+## ROI polygon editor — 2026-10-24 (`feature/roi-polygon-editor`)
+
+Windows/Python 3.11: **77 passed** (`pytest -q -o addopts= --disable-warnings`), `ruff check .` và `pip check` đạt. Test mới xác nhận tọa độ pixel ↔ normalized, loại polygon thiếu đỉnh/tự cắt/ngoài frame/chồng lấn, lưu/tải và khôi phục backup YAML, giữ FRONT-IN/REAR-OUT, `CameraPipeline` mới dùng ROI vừa lưu còn instance đang chạy giữ ROI cũ, thao tác click/dời đỉnh, đọc frame MP4 và dashboard vẫn render các tab cũ.
+
+Smoke YOLO11n + ByteTrack thật: `data/raw/in.mp4` local, FRONT 20 frame, exit 0, 0 event, 4.25 processing FPS, có H.264/CSV/preview/progress tại `runs/roi_smoke_20261024/`. Đây chỉ là kiểm tra đường chạy inference ngắn với ROI hiện tại; **không** đo accuracy và **chưa** kiểm thử thao tác click/kéo thả trong browser, webcam/RTSP vật lý hoặc quy trình hiệu chỉnh trên video có nhãn.
+
 ## Tab Đếm khách AI — 2026-10-24 (nhánh `feature/ai-counting-tab`)
 
 Tab mới dùng phiên độc lập `runs/ai_counting/`, không tạo Trip/telemetry/StopVisit. Windows/Python 3.11: **68 passed**, `ruff check .` và `pip check` đều đạt. Test phần mềm gồm AppTest empty/start/stop/reset/rerun/completed/MP4 lỗi hoặc thiếu nguồn, FRONT/REAR một nguồn, preview annotated, chiều ngược, stop giải phóng nguồn và giữ H.264/CSV từng phần, cô lập lỗi camera, webcam source và session không có Trip. Fixture dùng **FakeDetector**, không phải AI accuracy. Kiểm thử trình duyệt tương tác và camera webcam/RTSP vật lý vẫn chưa thực hiện.
