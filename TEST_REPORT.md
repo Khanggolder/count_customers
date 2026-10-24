@@ -1,5 +1,22 @@
 # Báo cáo kiểm thử BusStop Flow AI
 
+## Tab Đếm khách AI — 2026-10-24 (nhánh `feature/ai-counting-tab`)
+
+Tab mới dùng phiên độc lập `runs/ai_counting/`, không tạo Trip/telemetry/StopVisit. Windows/Python 3.11: **68 passed**, `ruff check .` và `pip check` đều đạt. Test phần mềm gồm AppTest empty/start/stop/reset/rerun/completed/MP4 lỗi hoặc thiếu nguồn, FRONT/REAR một nguồn, preview annotated, chiều ngược, stop giải phóng nguồn và giữ H.264/CSV từng phần, cô lập lỗi camera, webcam source và session không có Trip. Fixture dùng **FakeDetector**, không phải AI accuracy. Kiểm thử trình duyệt tương tác và camera webcam/RTSP vật lý vẫn chưa thực hiện.
+
+Chạy YOLO11n + ByteTrack thật trên RTX 3050 Laptop GPU với hai MP4 local `data/raw/in.mp4` (320×240, 770 frame, 25 FPS) và `data/raw/out.mp4` (320×240, 414 frame, 25 FPS). Đây là hai video người dùng cung cấp trên máy; không commit và chưa xác minh cùng xe/chuyến hay nhãn ground truth. ROI trong `configs/cameras.yaml` được ước lượng từ frame đầu và chưa hiệu chỉnh theo nhãn.
+
+| Run | FRONT | REAR | Output |
+| --- | --- | --- | --- |
+| 120 frame mỗi cửa | 2 IN, 21.96 processing FPS | 1 OUT, 22.65 processing FPS | 2 video H.264, 2 CSV |
+| Toàn clip sau sửa khóa preview Windows | 2 IN / 770 frame, 47.84 processing FPS | 1 OUT / 414 frame, 40.16 processing FPS | 2 video H.264, 2 CSV, không lỗi worker |
+
+Số đếm trên là **crossing event của model**, không phải số khách đã đối chiếu. Hai event FRONT ở frame 20 và 65 cùng Track ID; có nguy cơ đếm lặp do quay lại/dao động vùng, cần gán nhãn video và hiệu chỉnh ROI/debounce. Accuracy, MAE, precision/recall là `N/A`. Lượt chạy toàn clip đầu gặp `WinError 5` khi thay JPEG preview của FRONT nhưng REAR vẫn hoàn tất; sau khi thêm retry và cho preview lỗi không làm dừng inference, lượt chạy lại hoàn tất hai cửa.
+
+Smoke cô lập lỗi thật: FRONT trỏ đến MP4 không tồn tại, REAR xử lý 10 frame `out.mp4`, tạo output H.264 và `session_summary.json` báo riêng lỗi FRONT. Không có event ở 10 frame REAR này.
+
+Không diễn giải các số trên thành đánh giá độ chính xác AI.
+
 ## AI Video Lab — 2026-10-24 (nhánh `feature/ai-video-lab`)
 
 Windows/Python 3.11.0: `pytest --cov=busreid --cov=backend -W error` **56 passed**, combined coverage **87%**; `ruff check .` và `pip check` đều đạt. Test mới gồm upload MP4, chọn path/RTSP, empty state, dashboard sáu tab và video component, FRONT-IN/REAR-OUT, reverse không đếm, progress/cancel/failure, kiểm tra output H.264, timeline. Các video fixture dùng **FakeDetector**; chúng chỉ kiểm thử phần mềm, không đo accuracy AI. Streamlit AppTest xác nhận video element render; không phải browser E2E.

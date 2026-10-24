@@ -82,6 +82,17 @@ Mở dashboard tại <http://localhost:8501> và Swagger tại <http://localhost
 
 ### Xem AI Counting trực quan
 
+Tab **Đếm khách AI** là đường demo ngắn nhất và không cần FastAPI, Trip hay GPS:
+
+1. Chạy `.\.venv\Scripts\python.exe -m streamlit run app\dashboard.py` từ gốc repository.
+2. Mở `http://localhost:8501` → **Đếm khách AI**. Chọn MP4 upload/đường dẫn, webcam trên máy chạy Streamlit hoặc RTSP cho cửa trước/sau; có thể chỉ chọn một cửa. `data/raw/in.mp4` và `data/raw/out.mp4` là video cục bộ nếu đã có; chúng không nằm trong Git.
+3. Nhấn **Bắt đầu đếm**. Preview là frame YOLO + ByteTrack đã xử lý (box, Track ID/confidence, điểm neo, Zone A/B, hướng và số lượt), cập nhật theo frame thực. MP4 là **video phát lại**, không phải camera live. Chỉ crossing A→B tạo FRONT-IN hoặc REAR-OUT; bộ đếm không tăng theo thời gian.
+4. **Dừng đếm** yêu cầu worker kết thúc sau frame hiện tại, giải phóng nguồn và xuất video H.264 của phần đã xử lý. Sau khi worker dừng, **Đặt lại bộ đếm** chỉ xóa phiên trên màn hình, không xóa file. Kết thúc tự nhiên hiển thị cùng loại kết quả.
+
+Kết quả ở `runs/ai_counting/<session-id>/`: `front/rear_preview.jpg`, `front/rear_annotated.mp4`, `front/rear_events.csv`, `front/rear_progress.json`, `session_summary.json`. Mỗi camera có trạng thái và lỗi riêng; camera không chọn hiển thị “Chưa kết nối”, không coi 0 là quan sát. Phiên này **không tạo Trip, telemetry, StopVisit hoặc gán trạm**. Số liệu là output AI thực trên video được chọn, không phải độ chính xác; accuracy là N/A khi chưa có ground truth. ROI lấy từ `configs/cameras.yaml` và cần hiệu chỉnh theo góc quay. Không có webcam/RTSP vật lý trong test tự động.
+
+Tab **Hai cửa** dưới đây vẫn giữ luồng cũ cho AI Video Lab và Trip đã xác minh:
+
 Trong tab **Hai cửa**, chọn **AI Video Lab**. Với mỗi camera có thể upload MP4, chọn đường dẫn MP4 trên máy hoặc nhập RTSP. Chỉ cần một nguồn FRONT hoặc REAR là chạy được; không cần tạo Trip hay GPS. Bấm **Chạy AI Counting**, xem preview annotated cập nhật khoảng mỗi 15 frame, frame/FPS/thời gian và bộ đếm của từng camera. Nút **Hủy inference** tạo yêu cầu dừng giữa các frame. Sau khi hoàn tất, video H.264 có thể phát bằng trình duyệt và timeline cho phép xem crop bằng chứng hoặc tua gần thời điểm event. Các lớp box, Track ID/confidence, ROI, trajectory và event có thể bật/tắt trước khi chạy.
 
 Để thử ngay sau khi tải clip Pexels:

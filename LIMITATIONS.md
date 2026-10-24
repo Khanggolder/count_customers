@@ -1,5 +1,8 @@
 # Hạn chế
 
+- Tab **Đếm khách AI** đã chạy trên hai MP4 `in.mp4`/`out.mp4` do người dùng đặt tại máy; chưa có nhãn khách thực tế hay bằng chứng hai clip đồng bộ cùng chuyến. FRONT sinh hai event cho cùng một Track ID (frame 20/65), nên con số hiện tại cần review và không được coi là ground truth.
+- Webcam và RTSP vật lý chưa được thử. Khi Streamlit restart, tiến trình phiên đang chạy không có cơ chế khôi phục điều khiển; file kết quả còn trong `runs/ai_counting/`. Dừng xử lý được kiểm thử qua marker/worker trên MP4, không phải nút bấm trong browser thật.
+
 - Chưa có hai video FRONT/REAR cố định trên cùng xe, cùng chuyến và đồng bộ với GPS/cửa. Kiến trúc hai worker đã test bằng fake pipeline; chưa soak-test RTSP vật lý.
 - Clip Pexels có license rõ nhưng camera ngoài xe chuyển động, không đúng hình học camera gắn cao tại cửa. Kết quả 0 crossing phản ánh ROI/góc quay không phù hợp, không phải accuracy.
 - PCDS chưa tải được từ BaiYun; không có count ground truth đúng clip. `MAE`, precision và recall AI là `N/A`.
