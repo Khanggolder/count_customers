@@ -107,12 +107,20 @@ def annotate_frame(
         if options.boxes:
             cv2.rectangle(output, (x1, y1), (x2, y2), color, stroke)
         if options.track_ids:
+            track_label = f"{detection.track_id}  {detection.confidence:.2f}"
+            font_scale = 0.45 * scale
+            label_width = cv2.getTextSize(
+                track_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, max(1, round(scale))
+            )[0][0]
             cv2.putText(
                 output,
-                f"{detection.track_id}  {detection.confidence:.2f}",
-                (x1, max(y1 - round(8 * scale), round(18 * scale))),
+                track_label,
+                (
+                    max(0, min(x1, frame.shape[1] - label_width - 2)),
+                    max(y1 - round(8 * scale), round(18 * scale)),
+                ),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.45 * scale,
+                font_scale,
                 color,
                 max(1, round(scale)),
                 cv2.LINE_AA,
