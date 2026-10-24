@@ -68,9 +68,13 @@ class OpenCVVideoSource(VideoSource):
         self.capture.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, self.timeout_ms)
         self.capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, self.timeout_ms)
         if not self.capture.isOpened():
+            self.close()
             raise RuntimeError(f"Không mở được nguồn: {redact_source(self.source)}")
         width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if width <= 0 or height <= 0:
+            self.close()
+            raise RuntimeError(f"Nguồn không có kích thước frame hợp lệ: {redact_source(self.source)}")
         fps = float(self.capture.get(cv2.CAP_PROP_FPS)) or 25.0
         count_raw = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
         count = count_raw if count_raw > 0 and not self.is_rtsp else None

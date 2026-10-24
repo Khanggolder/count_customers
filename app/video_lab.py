@@ -27,11 +27,20 @@ def save_upload(upload: BinaryIO, filename: str, destination: Path) -> Path:
 
 
 def resolve_source(
-    upload: BinaryIO | None, filename: str | None, path: str, rtsp: str, destination: Path
+    upload: BinaryIO | None,
+    filename: str | None,
+    path: str,
+    rtsp: str,
+    destination: Path,
+    webcam_index: int | None = None,
 ) -> str | None:
-    selected = sum(bool(item) for item in (upload, path.strip(), rtsp.strip()))
+    selected = sum(bool(item) for item in (upload, path.strip(), rtsp.strip())) + (webcam_index is not None)
     if selected > 1:
-        raise ValueError("Mỗi camera chỉ chọn một nguồn: upload, đường dẫn hoặc RTSP")
+        raise ValueError("Mỗi camera chỉ chọn một nguồn: upload, đường dẫn, webcam hoặc RTSP")
+    if webcam_index is not None:
+        if webcam_index < 0:
+            raise ValueError("Webcam index phải không âm")
+        return f"webcam:{webcam_index}"
     if upload is not None:
         return str(save_upload(upload, filename or "", destination))
     if rtsp.strip():
@@ -63,10 +72,10 @@ def first_frame(path: str) -> bytes | None:
         capture.release()
 
 
-def new_job_dir(root: Path) -> Path:
-    output = (
-        root / "runs" / "video_lab" / f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S}_{uuid.uuid4().hex[:8]}"
-    )
+def new_job_dir(root: Path, kind: str = "video_lab") -> Path:
+    if kind not in {"video_lab", "ai_counting"}:
+        raise ValueError("Loại phiên không hợp lệ")
+    output = root / "runs" / kind / f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S}_{uuid.uuid4().hex[:8]}"
     output.mkdir(parents=True)
     return output
 
@@ -82,21 +91,24 @@ def start_job(
     synchronized: bool = False,
     max_frames: int = 0,
     hidden_layers: set[str] | None = None,
+    session_only: bool = False,
 ) -> subprocess.Popen:
     if not sources:
         raise ValueError("Chọn ít nhất một video FRONT hoặc REAR")
     command = [
         sys.executable,
-        str(root / "scripts" / "run_count.py"),
+        str(root / "scripts" / ("run_count_session.py" if session_only else "run_count.py")),
         "--config",
         str(root / "configs" / "cameras.yaml"),
         "--output",
         str(output),
-        "--cancel-file",
-        str(output / "cancel.request"),
+        "--stop-file" if session_only else "--cancel-file",
+        str(output / ("stop.request" if session_only else "cancel.request")),
     ]
     for camera, source in sources.items():
         command.extend([f"--{camera}", source])
+    if session_only and (trip_id or telemetry_file or capture_start or synchronized):
+        raise ValueError("Phiên đếm độc lập không nhận Trip hoặc telemetry")
     if trip_id:
         command.extend(["--trip-id", trip_id])
     if telemetry_file:
@@ -158,6 +170,7 @@ def event_timeline(output: Path, cameras: list[str]) -> list[dict]:
                             "event_status": "UNASSIGNED",
                             "timestamp_s": float(row["timestamp_s"]),
                             "crop_path": row["crop_path"],
+                            "created_at": row.get("created_at", ""),
                         }
                     )
     return sorted(rows, key=lambda row: (row["timestamp_s"], row["camera"]))

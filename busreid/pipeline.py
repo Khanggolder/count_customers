@@ -39,6 +39,7 @@ class PipelineResult:
     metadata: VideoMetadata
     device: str
     peak_vram_mb: float | None
+    status: str = "COMPLETED"
 
 
 @dataclass(slots=True)
@@ -54,10 +55,22 @@ class PipelineCancelled(RuntimeError):
     pass
 
 
+def _replace_with_retry(temporary: Path, destination: Path) -> None:
+    """Windows readers/scanners can briefly lock an existing preview file."""
+    for attempt in range(5):
+        try:
+            temporary.replace(destination)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
 def _write_progress(path: Path, **values: object) -> None:
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(values), encoding="utf-8")
-    temporary.replace(path)
+    _replace_with_retry(temporary, path)
 
 
 def _scale_polygon(points: list[tuple[float, float]], shape: tuple[int, ...]) -> np.ndarray:
@@ -74,6 +87,7 @@ def annotate_frame(
     options: OverlayOptions | None = None,
     trails: dict[str, deque[tuple[int, int]]] | None = None,
     frame_events: list[CrossingEvent] | None = None,
+    banner_events: list[CrossingEvent] | None = None,
 ) -> np.ndarray:
     options = options or OverlayOptions()
     output = frame.copy()
@@ -144,11 +158,12 @@ def annotate_frame(
         stroke,
         cv2.LINE_AA,
     )
-    if options.events and frame_events:
+    shown_events = banner_events if banner_events is not None else frame_events
+    if options.events and shown_events:
         cv2.putText(
             output,
-            f"+{len(frame_events)} {camera.event_direction.value}  "
-            + ", ".join(item.track_id for item in frame_events[:2]),
+            f"+{len(shown_events)} {camera.event_direction.value}  "
+            + ", ".join(item.track_id for item in shown_events[:2]),
             (origin, min(frame.shape[0] - round(30 * scale), round(78 * scale))),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8 * scale,
@@ -182,7 +197,7 @@ def _write_events(path: Path, events: list[CrossingEvent]) -> None:
             row["created_at"] = event.created_at.isoformat()
             row["capture_time_utc"] = event.capture_time_utc.isoformat() if event.capture_time_utc else ""
             writer.writerow(row)
-    temporary.replace(path)
+    _replace_with_retry(temporary, path)
 
 
 class CameraPipeline:
@@ -213,6 +228,7 @@ class CameraPipeline:
         recording_start_time: datetime | None = None,
         overlay: OverlayOptions | None = None,
         cancel_file: Path | None = None,
+        stop_file: Path | None = None,
     ) -> PipelineResult:
         destination = Path(output_dir)
         destination.mkdir(parents=True, exist_ok=True)
@@ -237,6 +253,8 @@ class CameraPipeline:
         progress_path = destination / f"{self.camera.name}_progress.json"
         frame_index = 0
         trails: dict[str, deque[tuple[int, int]]] = {}
+        recent_events: list[tuple[CrossingEvent, int]] = []
+        stopped = False
         device_name = "CPU"
         peak_vram_mb: float | None = None
         if isinstance(self.detector, PersonDetector):
@@ -260,6 +278,9 @@ class CameraPipeline:
             while max_frames is None or frame_index < max_frames:
                 if cancel_file and cancel_file.is_file():
                     raise PipelineCancelled("Inference cancelled by operator")
+                if stop_file and stop_file.is_file():
+                    stopped = True
+                    break
                 ok, frame, timestamp_s = source.read()
                 if not ok or frame is None:
                     break
@@ -289,12 +310,18 @@ class CameraPipeline:
                         counts[event.direction.value] += 1
                         events.append(event)
                         frame_events.append(event)
+                        recent_events.append((event, frame_index))
                         _write_events(events_file, events)
                         if on_event:
                             on_event(event, crops)
                 self.counter.prune_stale(frame_index)
                 active = set(self.counter.states)
                 trails = {key: value for key, value in trails.items() if key in active}
+                recent_events = [
+                    (event, first_frame)
+                    for event, first_frame in recent_events
+                    if frame_index - first_frame < max(4, round(metadata.fps * 0.7))
+                ]
                 annotated_frame = annotate_frame(
                     frame,
                     detections,
@@ -303,6 +330,7 @@ class CameraPipeline:
                     options=overlay,
                     trails=trails,
                     frame_events=frame_events,
+                    banner_events=[event for event, _ in recent_events],
                 )
                 writer.write(annotated_frame)
                 frame_index += 1
@@ -316,7 +344,11 @@ class CameraPipeline:
                             annotated_frame, (1280, round(annotated_frame.shape[0] * 1280 / width))
                         )
                     if cv2.imwrite(str(temporary), display_frame):
-                        temporary.replace(preview)
+                        try:
+                            _replace_with_retry(temporary, preview)
+                        except PermissionError:
+                            logger.warning("Preview file temporarily locked: %s", preview)
+                            temporary.unlink(missing_ok=True)
                 if frame_index % 10 == 0 or frame_events:
                     elapsed_now = time.perf_counter() - started
                     _write_progress(
@@ -358,8 +390,13 @@ class CameraPipeline:
             source.close()
         elapsed = time.perf_counter() - started
         try:
-            validate_video(intermediate, frame_index)
-            make_browser_video(intermediate, annotated, frame_index)
+            if frame_index:
+                validate_video(intermediate, frame_index)
+                make_browser_video(intermediate, annotated, frame_index)
+            elif not stopped:
+                raise RuntimeError("Nguồn video không cung cấp frame nào")
+            else:
+                intermediate.unlink(missing_ok=True)
         except Exception:
             _write_progress(
                 progress_path,
@@ -386,7 +423,7 @@ class CameraPipeline:
             counts=counts,
             elapsed_s=elapsed,
             processing_fps=frame_index / elapsed if elapsed else 0.0,
-            status="COMPLETED",
+            status="STOPPED" if stopped else "COMPLETED",
         )
         result = PipelineResult(
             camera=self.camera.name,
@@ -400,6 +437,7 @@ class CameraPipeline:
             metadata=metadata,
             device=device_name,
             peak_vram_mb=peak_vram_mb,
+            status="STOPPED" if stopped else "COMPLETED",
         )
         summary_path = destination / f"{self.camera.name}_summary.json"
         summary_path.write_text(
@@ -417,6 +455,7 @@ class CameraPipeline:
                     "counts": counts,
                     "metadata": asdict(metadata),
                     "result_kind": "REAL_INFERENCE",
+                    "status": result.status,
                 },
                 indent=2,
                 ensure_ascii=False,

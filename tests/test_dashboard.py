@@ -11,7 +11,7 @@ from streamlit.testing.v1 import AppTest
 from busreid.video_output import make_browser_video
 
 
-def test_dashboard_keeps_six_tabs_and_video_lab_empty_state(monkeypatch) -> None:
+def test_dashboard_keeps_six_original_tabs_and_new_counting_empty_state(monkeypatch) -> None:
     def offline(*_args, **_kwargs):
         raise requests.ConnectionError("API offline in dashboard fixture")
 
@@ -19,6 +19,7 @@ def test_dashboard_keeps_six_tabs_and_video_lab_empty_state(monkeypatch) -> None
     app = AppTest.from_file("app/dashboard.py").run(timeout=20)
     assert not app.exception
     assert [tab.label for tab in app.tabs] == [
+        "Đếm khách AI",
         "Tổng quan chuyến",
         "Hai cửa",
         "Trạm & bản đồ",
@@ -29,6 +30,8 @@ def test_dashboard_keeps_six_tabs_and_video_lab_empty_state(monkeypatch) -> None
     assert any("không cần GPS hay Trip" in item.value for item in app.info)
     assert any("Chưa chọn nguồn camera" in item.value for item in app.info)
     assert any(button.label == "Chạy AI Counting" for button in app.button)
+    assert any(button.label == "Bắt đầu đếm" for button in app.button)
+    assert any("Chưa kết nối" in item.value for item in app.info)
 
 
 def test_dashboard_renders_completed_annotated_video(tmp_path: Path, monkeypatch) -> None:

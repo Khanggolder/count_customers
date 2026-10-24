@@ -44,6 +44,7 @@ class DualCameraRunner:
         recording_start_time: datetime | None,
         overlay: OverlayOptions | None,
         cancel_file: Path | None,
+        stop_file: Path | None,
     ) -> PipelineResult:
         with self._lock:
             self.status[camera].state = "RUNNING"
@@ -56,9 +57,11 @@ class DualCameraRunner:
             options["overlay"] = overlay
         if cancel_file is not None:
             options["cancel_file"] = cancel_file
+        if stop_file is not None:
+            options["stop_file"] = stop_file
         result = CameraPipeline(self.config.cameras[camera], self.config).run(source, output_dir, **options)
         with self._lock:
-            self.status[camera].state = "COMPLETED"
+            self.status[camera].state = result.status if hasattr(result, "status") else "COMPLETED"
         return result
 
     def run(
@@ -69,6 +72,7 @@ class DualCameraRunner:
         recording_start_time: datetime | None = None,
         overlay: OverlayOptions | None = None,
         cancel_file: Path | None = None,
+        stop_file: Path | None = None,
     ) -> DualCameraResult:
         valid = {
             camera: source for camera, source in sources.items() if source and camera in self.config.cameras
@@ -89,6 +93,7 @@ class DualCameraRunner:
                     recording_start_time,
                     overlay,
                     cancel_file,
+                    stop_file,
                 ): camera
                 for camera, source in valid.items()
             }
