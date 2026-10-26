@@ -38,7 +38,7 @@ MVP không nhận diện danh tính, Re-ID, dự báo hay điều hành xe. Nó 
 Yêu cầu: Windows 11, Python 3.11, Git; NVIDIA driver tương thích nếu dùng GPU. Clone nhánh MVP và vào thư mục repository:
 
 ```powershell
-git clone --branch main https://github.com/Khanggolder/count_customers.git busstop-flow-ai
+git clone --branch feature/bidirectional-passenger-counting https://github.com/Khanggolder/count_customers.git busstop-flow-ai
 cd busstop-flow-ai
 ```
 
