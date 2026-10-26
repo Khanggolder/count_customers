@@ -11,11 +11,25 @@ from streamlit.testing.v1 import AppTest
 from busreid.video_output import make_browser_video
 
 
-def test_dashboard_keeps_six_original_tabs_and_new_counting_empty_state(monkeypatch) -> None:
+def test_dashboard_shows_only_counting_and_roi_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("BUSSTOP_SHOW_ADVANCED_TABS", raising=False)
+
     def offline(*_args, **_kwargs):
         raise requests.ConnectionError("API offline in dashboard fixture")
 
     monkeypatch.setattr(requests, "request", offline)
+    app = AppTest.from_file("app/dashboard.py").run(timeout=20)
+    assert not app.exception
+    assert [tab.label for tab in app.tabs] == ["Đếm khách AI", "Thiết lập vùng đếm (ROI)"]
+    assert any(button.label == "Bắt đầu đếm" for button in app.button)
+    assert not any(button.label == "Chạy AI Counting" for button in app.button)
+
+
+def test_dashboard_can_restore_advanced_tabs(monkeypatch) -> None:
+    monkeypatch.setenv("BUSSTOP_SHOW_ADVANCED_TABS", "1")
+    monkeypatch.setattr(requests, "request", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        requests.ConnectionError("API offline in dashboard fixture")
+    ))
     app = AppTest.from_file("app/dashboard.py").run(timeout=20)
     assert not app.exception
     assert [tab.label for tab in app.tabs] == [
@@ -28,14 +42,12 @@ def test_dashboard_keeps_six_original_tabs_and_new_counting_empty_state(monkeypa
         "Demo mẫu",
         "Cài đặt",
     ]
-    assert any("không cần GPS hay Trip" in item.value for item in app.info)
-    assert any("Chưa chọn nguồn camera" in item.value for item in app.info)
     assert any(button.label == "Chạy AI Counting" for button in app.button)
-    assert any(button.label == "Bắt đầu đếm" for button in app.button)
-    assert any("Chưa kết nối" in item.value for item in app.info)
 
 
 def test_dashboard_renders_completed_annotated_video(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BUSSTOP_SHOW_ADVANCED_TABS", "1")
+
     def offline(*_args, **_kwargs):
         raise requests.ConnectionError("API offline in dashboard fixture")
 

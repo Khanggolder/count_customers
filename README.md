@@ -80,6 +80,13 @@ Chạy API và dashboard trong hai PowerShell:
 
 Mở dashboard tại <http://localhost:8501> và Swagger tại <http://localhost:8000/docs>.
 
+Mặc định dashboard chỉ hiển thị hai tab **Đếm khách AI** và **Thiết lập vùng đếm (ROI)**; cả hai có thể chạy khi API offline. Sáu tab nghiệp vụ cũ được ẩn, không bị xóa. Để hiện lại chúng trong một phiên PowerShell mới, chạy:
+
+```powershell
+$env:BUSSTOP_SHOW_ADVANCED_TABS = "1"
+.\.venv\Scripts\python.exe -m streamlit run app\dashboard.py
+```
+
 ### Thiết lập vùng đếm (ROI) trên Dashboard
 
 Không cần Roboflow hay sửa YAML bằng tay. Chạy Streamlit như phần trên, mở tab **Thiết lập vùng đếm (ROI)** (không cần API):
@@ -111,7 +118,7 @@ Tab **Đếm khách AI** là đường demo ngắn nhất và không cần FastA
 
 Kết quả ở `runs/ai_counting/<session-id>/`: `front/rear_preview.jpg`, `front/rear_annotated.mp4`, `front/rear_events.csv`, `front/rear_progress.json`, `session_summary.json`. Mỗi camera có trạng thái và lỗi riêng; camera không chọn hiển thị “Chưa kết nối”, không coi 0 là quan sát. Phiên này **không tạo Trip, telemetry, StopVisit hoặc gán trạm**. Số liệu là output AI thực trên video được chọn, không phải độ chính xác; accuracy là N/A khi chưa có ground truth. ROI lấy từ `configs/cameras.yaml`; có thể hiệu chỉnh ngay trong tab **Thiết lập vùng đếm (ROI)**. Không có webcam/RTSP vật lý trong test tự động.
 
-Tab **Hai cửa** dưới đây vẫn giữ luồng cũ cho AI Video Lab và Trip đã xác minh:
+Tab **Hai cửa** vẫn giữ luồng cũ cho AI Video Lab và Trip đã xác minh, nhưng mặc định bị ẩn; bật `BUSSTOP_SHOW_ADVANCED_TABS=1` như trên để sử dụng:
 
 Trong tab **Hai cửa**, chọn **AI Video Lab**. Với mỗi camera có thể upload MP4, chọn đường dẫn MP4 trên máy hoặc nhập RTSP. Chỉ cần một nguồn FRONT hoặc REAR là chạy được; không cần tạo Trip hay GPS. Bấm **Chạy AI Counting**, xem preview annotated cập nhật khoảng mỗi 15 frame, frame/FPS/thời gian và bộ đếm của từng camera. Nút **Hủy inference** tạo yêu cầu dừng giữa các frame. Sau khi hoàn tất, video H.264 có thể phát bằng trình duyệt và timeline cho phép xem crop bằng chứng hoặc tua gần thời điểm event. Các lớp box, Track ID/confidence, ROI, trajectory và event có thể bật/tắt trước khi chạy.
 
@@ -190,7 +197,7 @@ Tạo trip thật qua `POST /trips` với một route/stop đã có; không dùn
 
 Lệnh dùng trip hiện có, tạo/kiểm tra `CameraSource`, chạy hai pipeline, nhập telemetry idempotent, phát hiện StopVisit, gán event và ghi `run_summary.json` + video annotated. `--telemetry-synchronized` là lời xác nhận của người vận hành, **không** phải thuật toán tự chứng minh đồng bộ. Event chỉ `AUTO_ASSIGNED` khi nguồn thuộc đúng trip/cửa, capture clock có neo thời gian, StopVisit confirmed và mẫu cửa tương ứng đang mở trong 2 giây trước event. Thiếu bằng chứng cửa thành `REVIEW_REQUIRED`; thiếu GPS/telemetry cùng nguồn hoặc không xác nhận đồng bộ thì `UNASSIGNED`. Public Pexels không có GPS cùng nguồn nên vẫn `UNASSIGNED`. Không dùng `--paired-verified` để ngụ ý coverage đầy đủ nếu chưa kiểm chứng; occupancy thật vẫn `N/A` khi `coverage_complete=false`.
 
-Dashboard tab **Hai cửa** cho chọn trip thật, FRONT/REAR, telemetry, capture start, xem preview/progress và video annotated H.264 sau khi xong. Đây là subprocess cục bộ Windows; không dùng làm dịch vụ inference nhiều người dùng. Các endpoint `/runs` hiện chỉ lưu metadata, chưa phải job queue chạy inference. `runs/` và video không được commit.
+Dashboard tab **Hai cửa** (chỉ hiện trong chế độ tab nâng cao) cho chọn trip thật, FRONT/REAR, telemetry, capture start, xem preview/progress và video annotated H.264 sau khi xong. Đây là subprocess cục bộ Windows; không dùng làm dịch vụ inference nhiều người dùng. Các endpoint `/runs` hiện chỉ lưu metadata, chưa phải job queue chạy inference. `runs/` và video không được commit.
 
 Demo chính: `POST /demo/generate` có 8 trạm, 44 event synthetic (43 gán trạm, 1 UNASSIGNED), 18 khách lên/25 khách xuống, occupancy ban đầu 8 và cuối chuyến 1. Đối chứng lỗi riêng: `POST /demo/generate?kind=negative_occupancy`, occupancy ban đầu 0 và có cảnh báo âm. Cả hai đều không phải AI output. Schema v2 dùng trip ID `SIM-R01-v2-20261019-0800`; dữ liệu scenario v1 trong SQLite không bị xóa, replay v1 bị từ chối. Flow/export mới loại các event lịch sử FRONT-OUT/REAR-IN; cột cũ `front_out`/`rear_in` còn trong API để tương thích nhưng luôn 0 trong thống kê hợp lệ.
 

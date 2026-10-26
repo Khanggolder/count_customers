@@ -16,11 +16,12 @@ from app.roi_editor import render_roi_editor
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "configs" / "cameras.yaml"
 DEFAULT_API = os.getenv("BUSSTOP_API_URL", "http://127.0.0.1:8000")
+SHOW_ADVANCED_TABS = os.getenv("BUSSTOP_SHOW_ADVANCED_TABS", "0").lower() in {"1", "true", "yes"}
 
 st.set_page_config(page_title="BusStop Flow AI", page_icon="🚌", layout="wide")
 st.title("BusStop Flow AI — Lưu lượng hành khách theo trạm")
 st.caption("MVP nghiên cứu cho một chuyến xe • Không nhận diện cá nhân • Không tối ưu lịch xe")
-api_url = st.sidebar.text_input("API URL", DEFAULT_API).rstrip("/")
+api_url = st.sidebar.text_input("API URL", DEFAULT_API).rstrip("/") if SHOW_ADVANCED_TABS else DEFAULT_API
 
 
 def api(method: str, path: str, raw: bool = False, quiet: bool = False, **kwargs):
@@ -36,25 +37,33 @@ def api(method: str, path: str, raw: bool = False, quiet: bool = False, **kwargs
         return None
 
 
-health = api("GET", "/health", quiet=True)
-if health:
-    st.sidebar.success("API hoạt động")
-else:
-    st.sidebar.warning("API offline · AI Video Lab vẫn chạy được")
+health = api("GET", "/health", quiet=True) if SHOW_ADVANCED_TABS else None
+if SHOW_ADVANCED_TABS:
+    if health:
+        st.sidebar.success("API hoạt động")
+    else:
+        st.sidebar.warning("API offline · AI Video Lab vẫn chạy được")
 
 trips = api("GET", "/trips") if health else []
 trip_ids = [item["trip_id"] for item in trips or []]
 selected_trip = st.sidebar.selectbox("Chuyến", trip_ids) if trip_ids else None
 
-counting_tab, roi_tab, overview_tab, cameras_tab, stops_tab, events_tab, demo_tab, settings_tab = st.tabs(
-    ["Đếm khách AI", "Thiết lập vùng đếm (ROI)", "Tổng quan chuyến", "Hai cửa", "Trạm & bản đồ", "Sự kiện & kiểm thử", "Demo mẫu", "Cài đặt"]
-)
+tab_labels = ["Đếm khách AI", "Thiết lập vùng đếm (ROI)"]
+if SHOW_ADVANCED_TABS:
+    tab_labels.extend(["Tổng quan chuyến", "Hai cửa", "Trạm & bản đồ", "Sự kiện & kiểm thử", "Demo mẫu", "Cài đặt"])
+tabs = st.tabs(tab_labels)
+counting_tab, roi_tab = tabs[:2]
 
 with counting_tab:
     render_counting_tab(ROOT)
 
 with roi_tab:
     render_roi_editor(ROOT)
+
+if not SHOW_ADVANCED_TABS:
+    st.stop()
+
+overview_tab, cameras_tab, stops_tab, events_tab, demo_tab, settings_tab = tabs[2:]
 
 with overview_tab:
     if not selected_trip:
