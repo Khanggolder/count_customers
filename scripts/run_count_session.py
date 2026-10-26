@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
-    parser = argparse.ArgumentParser(description="Independent FRONT-IN / REAR-OUT AI counting")
+    parser = argparse.ArgumentParser(description="Independent bidirectional FRONT/REAR AI counting")
     parser.add_argument("--front")
     parser.add_argument("--rear")
     parser.add_argument("--config", default="configs/cameras.yaml")
@@ -82,6 +82,12 @@ def main(argv: list[str] | None = None) -> int:
                 "status": result.status,
                 "frames": result.frames,
                 "count": len(result.events),
+                "counts": {
+                    "IN": sum(event.direction.value == "IN" for event in result.events),
+                    "OUT": sum(event.direction.value == "OUT" for event in result.events),
+                },
+                "occupancy_delta": sum(event.occupancy_delta for event in result.events),
+                "crossings": len(result.events),
                 "processing_fps": result.processing_fps,
             }
             for camera, result in outcome.results.items()

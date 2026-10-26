@@ -209,7 +209,9 @@ def main(argv: list[str] | None = None) -> int:
                     existing_times.add(when)
         for camera, result in outcome.results.items():
             for event in result.events:
-                validate_passenger_direction(camera, event.direction)
+                validate_passenger_direction(
+                    camera, event.direction, event.crossing_direction, event.occupancy_delta
+                )
                 capture_time = event.capture_time_utc or event.created_at
                 validate_event_source(
                     db,
@@ -230,7 +232,10 @@ def main(argv: list[str] | None = None) -> int:
                         trip_id=trip_id,
                         source_id=f"{trip_id}:{camera}",
                         camera=camera.upper(),
+                        crossing_direction=event.crossing_direction.value,
                         direction=event.direction.value,
+                        occupancy_delta=event.occupancy_delta,
+                        direction_status="SOURCE_ASSERTED",
                         track_id=event.track_id,
                         video_frame=event.frame_index,
                         source_pts=event.timestamp_s,

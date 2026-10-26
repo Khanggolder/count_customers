@@ -73,7 +73,10 @@ def test_single_camera_real_event_preview_and_reverse(tmp_path: Path, name: str,
     reverse = CameraPipeline(cam(name), config, Detector(name, reverse=True)).run(
         str(video), tmp_path / "reverse"
     )
-    assert reverse.events == []
+    reverse_direction = "OUT" if name == "front" else "IN"
+    reverse_delta = -1 if name == "front" else 1
+    assert [(event.direction.value, event.delta) for event in reverse.events] == [(reverse_direction, reverse_delta)]
+    assert json.loads((tmp_path / "reverse" / f"{name}_progress.json").read_text())["counts"][reverse_direction] == 1
 
 
 def test_stop_releases_video_and_keeps_partial_result(tmp_path: Path, monkeypatch) -> None:
@@ -171,6 +174,39 @@ def test_session_summary_has_no_trip_or_synthetic_data(tmp_path: Path, monkeypat
     assert summary["provenance"] == "REAL_VIDEO_AI"
     assert "trip_id" not in summary
     assert not list(tmp_path.glob("*.db"))
+
+
+def test_session_summary_uses_signed_counts_for_both_cameras(tmp_path: Path, monkeypatch) -> None:
+    positive = SimpleNamespace(direction=Direction.IN, occupancy_delta=1)
+    negative = SimpleNamespace(direction=Direction.OUT, occupancy_delta=-1)
+
+    class FakeRunner:
+        def __init__(self, _config):
+            pass
+
+        def run(self, _sources, _output, **_kwargs):
+            return SimpleNamespace(
+                results={
+                    "front": SimpleNamespace(status="COMPLETED", frames=3, events=[positive, negative], processing_fps=3.0),
+                    "rear": SimpleNamespace(status="COMPLETED", frames=3, events=[negative], processing_fps=3.0),
+                },
+                errors={},
+            )
+
+    monkeypatch.setattr("scripts.run_count_session.DualCameraRunner", FakeRunner)
+    monkeypatch.setattr("scripts.run_count_session.load_config", lambda _: object())
+    output = tmp_path / "signed"
+    assert session_main([
+        "--front", "front.mp4", "--rear", "rear.mp4",
+        "--output", str(output), "--stop-file", str(output / "stop"),
+    ]) == 0
+    cameras = json.loads((output / "session_summary.json").read_text())["cameras"]
+    assert cameras["front"]["count"] == 2
+    assert cameras["front"]["counts"] == {"IN": 1, "OUT": 1}
+    assert cameras["front"]["occupancy_delta"] == 0
+    assert cameras["rear"]["count"] == 1
+    assert cameras["rear"]["occupancy_delta"] == -1
+    assert cameras["front"]["crossings"] == 2
 
 
 def test_one_camera_failure_keeps_other_camera_result(tmp_path: Path, monkeypatch) -> None:
@@ -310,9 +346,34 @@ def test_completed_counting_tab_shows_ai_result_not_unconnected_zero(tmp_path: P
     assert len(app.get("video")) >= 1
     metrics = {item.label: item.value for item in app.metric}
     assert metrics["Tổng khách lên"] == "1"
-    assert metrics["Tổng khách xuống"] == "Chưa kết nối"
-    assert metrics["Tổng lượt ghi nhận"] == "1"
+    assert metrics["Tổng khách xuống"] == "0"
+    assert metrics["Chênh lệch ròng"] == "1"
     assert any("IN +1" in item.value for item in app.success)
+
+
+def test_dashboard_shows_front_reverse_as_out(tmp_path: Path) -> None:
+    (tmp_path / "front_progress.json").write_text(
+        json.dumps({"status": "COMPLETED", "frames": 8, "events": 1, "counts": {"IN": 0, "OUT": 1}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "front_events.csv").write_text(
+        "camera,track_id,crossing_direction,direction,occupancy_delta,delta,frame_index,timestamp_s,confidence,crop_path,capture_time_utc,created_at\n"
+        f"front,front:1,B_TO_A,OUT,-1,-1,4,0.4,0.9,,,{datetime.now(timezone.utc).isoformat()}\n",
+        encoding="utf-8",
+    )
+    app = AppTest.from_file("app/dashboard.py")
+    app.session_state["ai_counting_job"] = {
+        "process": SimpleNamespace(poll=lambda: 0, returncode=0),
+        "output": tmp_path,
+        "sources": {"front": "fixture.mp4"},
+    }
+    app.run(timeout=20)
+    assert not app.exception
+    metrics = {item.label: item.value for item in app.metric}
+    assert metrics["Tổng khách lên"] == "0"
+    assert metrics["Tổng khách xuống"] == "1"
+    assert metrics["Chênh lệch ròng"] == "-1"
+    assert any("OUT -1" in item.value for item in app.warning)
 
 
 def test_failed_camera_without_frames_is_not_reported_as_zero(tmp_path: Path, monkeypatch) -> None:
@@ -332,5 +393,5 @@ def test_failed_camera_without_frames_is_not_reported_as_zero(tmp_path: Path, mo
     assert not app.exception
     metrics = {item.label: item.value for item in app.metric}
     assert metrics["Tổng khách lên"] == "Chưa có frame"
-    assert metrics["Tổng khách xuống"] == "Chưa kết nối"
-    assert metrics["Tổng lượt ghi nhận"] == "Chưa có frame"
+    assert metrics["Tổng khách xuống"] == "Chưa có frame"
+    assert metrics["Chênh lệch ròng"] == "Chưa có frame"

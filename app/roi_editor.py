@@ -210,7 +210,10 @@ def _apply_click(
 
 def render_roi_editor(root: Path) -> None:
     st.subheader("Thiết lập vùng đếm (ROI)")
-    st.caption("FRONT: A → B = IN · REAR: A → B = OUT. Đây là vùng đếm, không phải nhãn ground truth.")
+    st.caption(
+        "FRONT A → B = IN (+1 occupancy), B → A = OUT (-1); "
+        "REAR A → B = OUT (-1), B → A = IN (+1). ROI không phải ground truth."
+    )
     config_path = root / "configs" / "cameras.yaml"
     camera = st.selectbox("Camera", ["front", "rear"], format_func=str.upper)
     state = _editor_state(camera, config_path)

@@ -41,10 +41,22 @@ def evaluate(pred: list[dict], gt: list[dict] | None, tolerance_s: float = 1.0) 
     if gt is None or not gt:
         return {
             "mae": None,
+            "mae_in": None,
+            "mae_out": None,
+            "net_mae": None,
+            "count_accuracy_in": None,
+            "count_accuracy_out": None,
             "precision": None,
             "recall": None,
             "model_validation": "NO_GROUND_TRUTH_NA",
             "rows": [],
+        }
+    if any(row.get("delta") == "-1" and not row.get("crossing_direction") for row in pred):
+        return {
+            "mae": None, "mae_in": None, "mae_out": None, "net_mae": None,
+            "count_accuracy_in": None, "count_accuracy_out": None,
+            "precision": None, "recall": None,
+            "model_validation": "LEGACY_AMBIGUOUS_DIRECTION_NA", "rows": [],
         }
     predicted, truth = count_by_clip(pred), count_by_clip(gt)
     keys = sorted(set(predicted) | set(truth))
@@ -66,36 +78,51 @@ def evaluate(pred: list[dict], gt: list[dict] | None, tolerance_s: float = 1.0) 
             "model_validation": "NO_COMMON_LABELS_NA",
             "rows": [],
         }
-    timed = all(_time(row) is not None for row in pred + gt)
+    predicted_events = [row for row in pred if row.get("direction")]
+    truth_events = [row for row in gt if row.get("direction")]
+    timed = bool(truth_events) and all(_time(row) is not None for row in predicted_events + truth_events)
     precision = recall = None
     matched = 0
     if timed:
         for key in keys:
             remaining = sorted(
-                _time(row)
-                for row in gt
-                if ((row.get("clip") or row.get("clip_dir") or "single"), row.get("direction", "").upper())
-                == key
+                [
+                    (row, _time(row))
+                    for row in truth_events
+                    if ((row.get("clip") or row.get("clip_dir") or "single"), row.get("direction", "").upper())
+                    == key
+                ],
+                key=lambda item: item[1],
             )
-            for prediction in sorted(
-                _time(row)
-                for row in pred
-                if ((row.get("clip") or row.get("clip_dir") or "single"), row.get("direction", "").upper())
-                == key
+            for prediction, prediction_time in sorted(
+                [
+                    (row, _time(row))
+                    for row in predicted_events
+                    if ((row.get("clip") or row.get("clip_dir") or "single"), row.get("direction", "").upper())
+                    == key
+                ],
+                key=lambda item: item[1],
             ):
                 choices = [
-                    (abs(value - prediction), index)
-                    for index, value in enumerate(remaining)
-                    if abs(value - prediction) <= tolerance_s
+                    (abs(value - prediction_time), index)
+                    for index, (label, value) in enumerate(remaining)
+                    if abs(value - prediction_time) <= tolerance_s
+                    and (not prediction.get("camera") or not label.get("camera") or prediction["camera"].upper() == label["camera"].upper())
+                    and (not prediction.get("crossing_direction") or not label.get("crossing_direction") or prediction["crossing_direction"] == label["crossing_direction"])
                 ]
                 if choices:
                     _, index = min(choices)
                     remaining.pop(index)
                     matched += 1
-        precision = matched / len(pred) if pred else (1.0 if not gt else 0.0)
-        recall = matched / len(gt) if gt else 1.0
+        precision = matched / len(predicted_events) if predicted_events else (1.0 if not truth_events else 0.0)
+        recall = matched / len(truth_events) if truth_events else 1.0
     return {
         "mae": sum(row["absolute_error"] for row in rows) / len(rows),
+        "mae_in": _direction_mae(rows, "IN"),
+        "mae_out": _direction_mae(rows, "OUT"),
+        "net_mae": _net_mae(predicted, truth),
+        "count_accuracy_in": _exact_rate(rows, "IN"),
+        "count_accuracy_out": _exact_rate(rows, "OUT"),
         "precision": precision,
         "recall": recall,
         "matched_events": matched if timed else None,
@@ -103,6 +130,27 @@ def evaluate(pred: list[dict], gt: list[dict] | None, tolerance_s: float = 1.0) 
         "model_validation": "TIMED_EVENT_MATCH" if timed else "COUNT_ONLY",
         "rows": rows,
     }
+
+
+def _direction_mae(rows: list[dict], direction: str) -> float | None:
+    values = [row["absolute_error"] for row in rows if row["direction"] == direction]
+    return sum(values) / len(values) if values else None
+
+
+def _exact_rate(rows: list[dict], direction: str) -> float | None:
+    values = [row["absolute_error"] for row in rows if row["direction"] == direction]
+    return sum(error == 0 for error in values) / len(values) if values else None
+
+
+def _net_mae(predicted: dict[tuple[str, str], int], truth: dict[tuple[str, str], int]) -> float:
+    clips = {clip for clip, _ in predicted | truth}
+    return sum(
+        abs(
+            predicted.get((clip, "IN"), 0) - predicted.get((clip, "OUT"), 0)
+            - truth.get((clip, "IN"), 0) + truth.get((clip, "OUT"), 0)
+        )
+        for clip in clips
+    ) / len(clips)
 
 
 def main() -> int:

@@ -28,7 +28,7 @@ def _source_input(camera: str, root: Path) -> tuple[object | None, str, str]:
         else ""
     )
     rtsp = st.text_input("RTSP URL", type="password", key=f"rtsp_{camera}") if mode == "RTSP" else ""
-    st.caption("ROI A → B · chỉ đếm IN" if camera == "front" else "ROI A → B · chỉ đếm OUT")
+    st.caption("FRONT A → B: IN, B → A: OUT · REAR A → B: OUT, B → A: IN")
     if mode == "Không dùng":
         st.info("Chưa chọn nguồn camera này.")
     elif mode == "RTSP":
@@ -53,12 +53,14 @@ def _camera_panel(output: Path, camera: str, active: bool, returncode: int | Non
             return
         progress = camera_status(output, camera, returncode)
         state = progress["status"]
-        st.caption(f"Trạng thái: {state} · A → B hợp lệ")
-        count = progress.get("counts", {}).get("IN" if camera == "front" else "OUT", 0)
-        metrics = st.columns(3)
-        metrics[0].metric("Lượt đếm AI", count)
-        metrics[1].metric("Frames", progress.get("frames", 0))
-        metrics[2].metric("FPS xử lý", f"{progress.get('processing_fps', 0):.1f}")
+        st.caption(f"Trạng thái: {state} · hai chiều IN/OUT")
+        count_in = progress.get("counts", {}).get("IN", 0)
+        count_out = progress.get("counts", {}).get("OUT", 0)
+        metrics = st.columns(4)
+        metrics[0].metric("IN", count_in)
+        metrics[1].metric("OUT", count_out)
+        metrics[2].metric("Ròng", count_in - count_out)
+        metrics[3].metric("FPS xử lý", f"{progress.get('processing_fps', 0):.1f}")
         st.caption(
             f"Thời gian xử lý {progress.get('elapsed_s', 0):.1f}s · {progress.get('events', 0)} sự kiện"
         )
@@ -92,9 +94,9 @@ def _render_timeline(output: Path, cameras: list[str], trip_id: str | None, api:
             if match:
                 row["event_status"] = match["assignment_status"]
     if not rows:
-        st.info("Chưa có sự kiện A → B từ AI. Chuyển động ngược không làm tăng lượt.")
+        st.info("Chưa có crossing A ↔ B từ AI.")
         return
-    columns = ["timestamp", "camera", "track_id", "direction", "frame_index", "confidence", "event_status"]
+    columns = ["timestamp", "camera", "track_id", "crossing_direction", "direction", "occupancy_delta", "frame_index", "confidence", "event_status"]
     st.dataframe(pd.DataFrame(rows)[columns], use_container_width=True, hide_index=True)
     chosen = st.selectbox(
         "Xem bằng chứng sự kiện",
@@ -115,7 +117,7 @@ def _render_timeline(output: Path, cameras: list[str], trip_id: str | None, api:
 def render_camera_tab(root: Path, trips: list[dict], api: Callable) -> None:
     st.subheader("AI Counting · hai cửa")
     st.caption(
-        "YOLO11n + ByteTrack · FRONT chỉ IN · REAR chỉ OUT · video thực không có telemetry giữ UNASSIGNED"
+        "YOLO + ByteTrack · FRONT/REAR đều đếm IN và OUT · video không có telemetry cùng nguồn giữ UNASSIGNED"
     )
     mode = st.radio("Chế độ", ["AI Video Lab", "Gắn với chuyến thật"], horizontal=True)
     trip_id = None

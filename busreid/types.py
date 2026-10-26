@@ -18,6 +18,11 @@ class Direction(StrEnum):
     OUT = "OUT"
 
 
+class CrossingDirection(StrEnum):
+    A_TO_B = "A_TO_B"
+    B_TO_A = "B_TO_A"
+
+
 @dataclass(slots=True)
 class Detection:
     track_id: str
@@ -43,7 +48,9 @@ class Detection:
 class CrossingEvent:
     camera: str
     track_id: str
+    crossing_direction: CrossingDirection
     direction: Direction
+    occupancy_delta: int
     frame_index: int
     timestamp_s: float
     confidence: float | None = None
@@ -51,6 +58,11 @@ class CrossingEvent:
     synthetic: bool = False
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     capture_time_utc: datetime | None = None
+
+    @property
+    def delta(self) -> int:
+        """Compatibility alias: delta means occupancy change, never polygon direction."""
+        return self.occupancy_delta
 
 
 @dataclass(slots=True)

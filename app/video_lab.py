@@ -168,15 +168,26 @@ def event_timeline(output: Path, cameras: list[str]) -> list[dict]:
         if path.is_file():
             with path.open(newline="", encoding="utf-8-sig") as handle:
                 for row in csv.DictReader(handle):
+                    crossing = row.get("crossing_direction") or None
+                    if crossing:
+                        occupancy_delta = int(row["occupancy_delta"])
+                        status = "UNASSIGNED"
+                    else:
+                        # Old signed CSV used delta as a camera-net correction, not direction.
+                        occupancy_delta = int(row.get("delta") or 1) if row.get("delta", "1") != "-1" else None
+                        status = "LEGACY_INFERRED" if occupancy_delta is not None else "REVIEW_REQUIRED"
                     rows.append(
                         {
                             "timestamp": row["capture_time_utc"] or f"{float(row['timestamp_s']):.2f}s video",
                             "camera": camera.upper(),
                             "track_id": row["track_id"],
                             "direction": row["direction"],
+                            "crossing_direction": crossing,
+                            "occupancy_delta": occupancy_delta,
+                            "delta": occupancy_delta,
                             "frame_index": int(row["frame_index"]),
                             "confidence": row["confidence"],
-                            "event_status": "UNASSIGNED",
+                            "event_status": status,
                             "timestamp_s": float(row["timestamp_s"]),
                             "crop_path": row["crop_path"],
                             "created_at": row.get("created_at", ""),

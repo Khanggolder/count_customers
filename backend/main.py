@@ -19,6 +19,7 @@ from busreid.service import (
     flow_rows,
     replay_scenario,
     update_assignment,
+    update_event_direction,
     validate_event_source,
 )
 
@@ -33,7 +34,14 @@ from .models import (
     TelemetrySampleModel,
     TripModel,
 )
-from .schemas import AssignmentPatch, PassengerEventCreate, RunCreate, TelemetryCreate, TripCreate
+from .schemas import (
+    AssignmentPatch,
+    EventDirectionPatch,
+    PassengerEventCreate,
+    RunCreate,
+    TelemetryCreate,
+    TripCreate,
+)
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="BusStop Flow AI API", version="0.2.0")
@@ -68,8 +76,11 @@ def _event_dict(row: PassengerEventModel) -> dict:
         "trip_id": row.trip_id,
         "source_id": row.source_id,
         "camera": row.camera,
+        "crossing_direction": row.crossing_direction,
         "direction": row.direction,
-        "policy_valid": (row.camera, row.direction) in {("FRONT", "IN"), ("REAR", "OUT")},
+        "occupancy_delta": row.occupancy_delta,
+        "direction_status": row.direction_status,
+        "policy_valid": _event_policy_valid(row),
         "track_id": row.track_id,
         "video_frame": row.video_frame,
         "source_pts": row.source_pts,
@@ -81,6 +92,18 @@ def _event_dict(row: PassengerEventModel) -> dict:
         "evidence_path": row.evidence_path,
         "provenance": row.provenance,
     }
+
+
+def _event_policy_valid(row: PassengerEventModel) -> bool:
+    if row.direction_status == "REVIEW_REQUIRED" or row.crossing_direction is None:
+        return False
+    try:
+        validate_passenger_direction(
+            row.camera, row.direction, row.crossing_direction, row.occupancy_delta
+        )
+        return row.occupancy_delta is not None
+    except ValueError:
+        return False
 
 
 @app.get("/health")
@@ -303,7 +326,9 @@ def create_passenger_event(
 ) -> dict:
     _trip_or_404(trip_id, db)
     try:
-        validate_passenger_direction(payload.camera, payload.direction)
+        validate_passenger_direction(
+            payload.camera, payload.direction, payload.crossing_direction, payload.occupancy_delta
+        )
         validate_event_source(
             db, trip_id, payload.source_id, payload.camera, payload.provenance, payload.source_type
         )
@@ -315,11 +340,19 @@ def create_passenger_event(
     if existing is not None:
         if existing.trip_id != trip_id or existing.source_id != payload.source_id:
             raise HTTPException(409, "event_uuid already belongs to a different trip/source")
+        if (
+            existing.camera != payload.camera
+            or existing.crossing_direction != payload.crossing_direction
+            or existing.direction != payload.direction
+            or existing.occupancy_delta != payload.occupancy_delta
+        ):
+            raise HTTPException(409, "event_uuid conflicts with an existing crossing")
         return {**_event_dict(existing), "duplicate": True}
     row = PassengerEventModel(
         trip_id=trip_id,
         stop_visit_id=None,
         assignment_status="UNASSIGNED",
+        direction_status="SOURCE_ASSERTED",
         **{**payload.model_dump(), "event_time_utc": payload.event_time_utc.astimezone(timezone.utc)},
     )
     db.add(row)
@@ -334,6 +367,19 @@ def patch_assignment(event_id: int, payload: AssignmentPatch, db: Session = Depe
         return _event_dict(
             update_assignment(db, event_id, payload.stop_visit_id, payload.actor, payload.reason)
         )
+    except KeyError as exc:
+        raise HTTPException(404, "Không tìm thấy event") from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.patch("/passenger-events/{event_id}/direction")
+def patch_event_direction(event_id: int, payload: EventDirectionPatch, db: Session = Depends(get_db)) -> dict:
+    try:
+        return _event_dict(update_event_direction(
+            db, event_id, payload.crossing_direction, payload.direction,
+            payload.occupancy_delta, payload.actor, payload.reason,
+        ))
     except KeyError as exc:
         raise HTTPException(404, "Không tìm thấy event") from exc
     except ValueError as exc:
@@ -398,7 +444,7 @@ def export_trip(
 
 @app.post("/demo/generate", status_code=201)
 def generate_demo(
-    kind: str = Query("normal", pattern="^(normal|negative_occupancy)$"), db: Session = Depends(get_db)
+    kind: str = Query("normal", pattern="^(normal|negative_occupancy|incomplete_camera)$"), db: Session = Depends(get_db)
 ) -> dict:
     return replay_scenario(db, build_scenario(kind=kind))
 

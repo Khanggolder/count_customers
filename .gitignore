@@ -16,6 +16,7 @@ runs/*
 !runs/.gitkeep
 *.db
 *.db-*
+*.db.before-bidirectional-*.bak
 *.sqlite*
 *.pt
 *.onnx

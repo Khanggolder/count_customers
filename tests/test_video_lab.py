@@ -93,8 +93,12 @@ def test_ai_overlay_browser_video_and_reverse_policy(tmp_path: Path, name: str, 
         tmp_path / "reverse",
         overlay=OverlayOptions(boxes=False, track_ids=False, zones=False, trajectory=False, events=False),
     )
-    assert reverse.events == []
-    assert camera_status(tmp_path / "reverse", name, 0)["counts"][direction.value] == 0
+    assert [event.direction.value for event in reverse.events] == ["OUT" if name == "front" else "IN"]
+    assert [event.delta for event in reverse.events] == [-1 if name == "front" else 1]
+    assert camera_status(tmp_path / "reverse", name, 0)["counts"][reverse.events[0].direction.value] == 1
+    reverse_row = event_timeline(tmp_path / "reverse", [name])[0]
+    assert reverse_row["delta"] == (-1 if name == "front" else 1)
+    assert reverse_row["event_status"] == "UNASSIGNED"
 
 
 def test_progress_failure_invalid_output_and_cancel(tmp_path: Path, monkeypatch) -> None:
@@ -157,6 +161,7 @@ def test_timeline_reads_both_cameras(tmp_path: Path) -> None:
             )
     rows = event_timeline(tmp_path, ["front", "rear"])
     assert {(row["camera"], row["direction"]) for row in rows} == {("FRONT", "IN"), ("REAR", "OUT")}
+    assert all(row["delta"] == 1 for row in rows)  # Old positive CSV stays readable as inferred.
     (tmp_path / "front_progress.json").write_text(json.dumps({"status": "RUNNING", "frames": 5}))
     assert camera_status(tmp_path, "front", None)["frames"] == 5
 

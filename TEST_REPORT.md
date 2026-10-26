@@ -1,5 +1,15 @@
 # Báo cáo kiểm thử BusStop Flow AI
 
+## Bidirectional passenger counting — 2026-10-26
+
+Trên máy Windows/Python 3.11: `python -m pytest --cov=busreid --cov=backend -W error` **115 passed**, combined coverage **87%**; `python -m ruff check .` **pass**; `python -m pip check` **No broken requirements found**. Bộ test bao gồm Streamlit AppTest, migration backup/idempotence, API bốn tổ hợp và từ chối mâu thuẫn, GPS stale, RTSP fake reconnect, hai MP4 fixture qua FakeDetector → bốn event → StopVisit/flow, scenario v3 và evaluator IN/OUT/net. FakeDetector chỉ kiểm thử nối phần mềm, **không phải AI accuracy**. Không có nhãn camera xe thật đồng bộ nên MAE/precision/recall AI thực là **N/A**.
+
+Đã migration SQLite cục bộ sau khi xác nhận API dừng: backup `data/busstop_flow.db.before-bidirectional-20261026T153208618893.bak`, integrity check `ok`, giữ nguyên 205 event: 179 `INFERRED_LEGACY`, 26 `REVIEW_REQUIRED`. Đây là phân loại theo bằng chứng policy cũ, không phải xác minh thủ công hay nhãn AI. Dashboard Streamlit đang mở không được dùng làm bằng chứng browser E2E.
+
+Smoke YOLO + ByteTrack thực qua `scripts/run_count_session.py` trên 5 frame đầu của clip công khai Pexels `data/raw/pexels_bus_boarding_31337217.mp4`: exit 0, video annotated/CSV/progress/summary tạo được, 5 frame, 0 IN/0 OUT, `processing_fps=0.6008` (đo ngắn gồm khởi động, không đại diện throughput ổn định). Clip không phải cặp camera trên xe và không có ground truth/telemetry đồng bộ; không suy từ 0 event ra accuracy.
+
+Các phần dưới đây là báo cáo lịch sử cho các commit trước bidirectional; số liệu/policy cũ không mô tả phiên bản hiện hành.
+
 ## Hoàn thiện ROI PR #4 — 2026-10-24
 
 Windows/Python 3.11: `pytest --cov=busreid --cov=backend -W error` **104 passed**, combined coverage **87%**; Ruff và `pip check` đạt. Test mới dùng FakeDetector/MP4 fixture để xác nhận seek từ frame tuyệt đối, giới hạn đoạn xử lý, timestamp/CSV/video annotated, FRONT-IN/REAR-OUT, không đếm chiều ngược; FakeDetector chỉ kiểm thử phần mềm, không đo AI accuracy. Test thêm polygon 0–n đỉnh, lỗi webcam/RTSP qua fake capture, giữ draft khi lỗi, backup/restore riêng FRONT/REAR, snapshot YAML cho worker và Streamlit AppTest xóa vùng/chuyển camera/MP4 thiếu không crash. Browser click/kéo thật **chưa kiểm chứng**: IAB không khả dụng, Windows Computer Use lỗi native pipe sau retry/reset. Checklist thủ công nằm trong README.

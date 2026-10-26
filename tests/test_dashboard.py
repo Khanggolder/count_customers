@@ -74,7 +74,7 @@ def test_dashboard_renders_completed_annotated_video(tmp_path: Path, monkeypatch
     app.run(timeout=20)
     assert not app.exception
     assert len(app.get("video")) == 1
-    assert any(metric.label == "Lượt đếm AI" for metric in app.metric)
+    assert any(metric.label == "IN" for metric in app.metric)
 
 
 def test_roi_editor_empty_zone_and_camera_drafts_survive_reruns(tmp_path: Path, monkeypatch) -> None:

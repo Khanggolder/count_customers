@@ -15,15 +15,16 @@ STOP_NAMES = [
     "Chợ Nanci",
 ]
 
+# FRONT-IN, FRONT-OUT, REAR-IN, REAR-OUT at each stop.
 FLOW_MATRIX = [
-    (4, 0),
-    (3, 2),
-    (2, 3),
-    (5, 2),
-    (1, 4),
-    (2, 3),
-    (1, 3),
-    (0, 8),
+    (4, 1, 0, 0),
+    (3, 0, 1, 2),
+    (2, 0, 0, 3),
+    (5, 1, 1, 2),
+    (1, 0, 0, 4),
+    (2, 0, 0, 3),
+    (1, 0, 0, 3),
+    (0, 0, 0, 8),
 ]
 
 
@@ -33,7 +34,7 @@ def _iso(value: datetime) -> str:
 
 def build_scenario(seed: int = 42, kind: str = "normal") -> dict:
     """Build a deterministic, fully labelled scenario; seed is recorded for reproducibility."""
-    if kind not in {"normal", "negative_occupancy"}:
+    if kind not in {"normal", "negative_occupancy", "incomplete_camera"}:
         raise ValueError("Unknown scenario kind")
     start = datetime(2026, 10, 19, 1, 0, tzinfo=timezone.utc)  # 08:00 Asia/Ho_Chi_Minh
     base_lat, base_lon = 10.77175, 106.69835
@@ -160,21 +161,36 @@ def build_scenario(seed: int = 42, kind: str = "normal") -> dict:
             }
         )
         event_time = arrived + timedelta(seconds=4)
-        for camera, direction, count in (
-            ("front", "IN", flows[0]),
-            ("rear", "OUT", flows[1]),
+        for camera, crossing, direction, count in (
+            ("front", "A_TO_B", "IN", flows[0]),
+            ("front", "B_TO_A", "OUT", flows[1]),
+            ("rear", "B_TO_A", "IN", flows[2]),
+            ("rear", "A_TO_B", "OUT", flows[3]),
         ):
+            if kind == "incomplete_camera" and camera == "rear":
+                continue
             for number in range(count):
-                uid = f"SIM-v2-{kind}-{stop_index + 1:02d}-{camera}-{direction}-{number + 1:03d}"
+                event_offset_ms = (
+                    500
+                    if stop_index == 3 and camera == "front" and direction == "OUT" and number == 0
+                    else number * 10
+                )
+                uid = f"SIM-v3-{kind}-{stop_index + 1:02d}-{camera}-{direction}-{number + 1:03d}"
                 events.append(
                     {
                         "event_uuid": uid,
                         "camera": camera,
+                        "crossing_direction": crossing,
                         "direction": direction,
-                        "track_id": f"{camera}:sim:{stop_index + 1}:{direction}:{number + 1}",
+                        "occupancy_delta": 1 if direction == "IN" else -1,
+                        "track_id": (
+                            f"front:sim:{stop_index + 1}:return:1"
+                            if stop_index == 3 and camera == "front" and number == 0
+                            else f"{camera}:sim:{stop_index + 1}:{direction}:{number + 1}"
+                        ),
                         "video_frame": None,
-                        "source_pts": (event_time - start).total_seconds() + number * 0.01,
-                        "event_time_utc": _iso(event_time + timedelta(milliseconds=number * 10)),
+                        "source_pts": (event_time - start).total_seconds() + event_offset_ms / 1000,
+                        "event_time_utc": _iso(event_time + timedelta(milliseconds=event_offset_ms)),
                         "source_type": "SIMULATED_EVENT_GENERATOR",
                         "source_confidence": 1.0,
                         "provenance": "SIMULATED_EVENTS",
@@ -185,9 +201,11 @@ def build_scenario(seed: int = 42, kind: str = "normal") -> dict:
 
     events.append(
         {
-            "event_uuid": f"SIM-v2-{kind}-UNASSIGNED-CONTROL",
+            "event_uuid": f"SIM-v3-{kind}-UNASSIGNED-CONTROL",
             "camera": "front",
+            "crossing_direction": "A_TO_B",
             "direction": "IN",
+            "occupancy_delta": 1,
             "track_id": "front:sim:unassigned",
             "video_frame": None,
             "source_pts": 3.0,
@@ -199,26 +217,30 @@ def build_scenario(seed: int = 42, kind: str = "normal") -> dict:
         }
     )
     expected = []
-    initial_occupancy = 8 if kind == "normal" else 0
+    initial_occupancy = 8 if kind != "negative_occupancy" else 0
     occupancy = initial_occupancy
     for stop, flows in zip(stops, FLOW_MATRIX, strict=True):
-        total_in, total_out = flows
+        front_in, front_out, rear_in, rear_out = flows
+        if kind == "incomplete_camera":
+            rear_in = rear_out = 0
+        total_in = front_in + rear_in
+        total_out = front_out + rear_out
         occupancy += total_in - total_out
         expected.append(
             {
                 "stop_id": stop["stop_id"],
-                "front_in": flows[0],
-                "front_out": 0,
-                "rear_in": 0,
-                "rear_out": flows[1],
+                "front_in": front_in,
+                "front_out": front_out,
+                "rear_in": rear_in,
+                "rear_out": rear_out,
                 "total_in": total_in,
                 "total_out": total_out,
-                "onboard_after_stop": occupancy,
+                "onboard_after_stop": occupancy if kind != "incomplete_camera" else None,
             }
         )
 
     return {
-        "schema_version": "2.0",
+        "schema_version": "3.0",
         "label": "DỮ LIỆU MÔ PHỎNG / SIMULATED EVENTS",
         "seed": seed,
         "route": {
@@ -230,23 +252,44 @@ def build_scenario(seed: int = 42, kind: str = "normal") -> dict:
             "verified": False,
         },
         "trip": {
-            "trip_id": "SIM-R01-v2-20261019-0800" if kind == "normal" else "SIM-R01-v2-NEGATIVE-CONTROL",
+            "trip_id": {
+                "normal": "SIM-R01-v3-20261019-0800",
+                "negative_occupancy": "SIM-R01-v3-NEGATIVE-CONTROL",
+                "incomplete_camera": "SIM-R01-v3-INCOMPLETE-CAMERA",
+            }[kind],
             "vehicle_id": "SIM-BUS-01",
             "start_time_utc": _iso(start),
             "end_time_utc": _iso(cursor),
-            "mode": "SYNTHETIC_PAIRED",
+            "mode": "UNPAIRED" if kind == "incomplete_camera" else "SYNTHETIC_PAIRED",
             "initial_occupancy": initial_occupancy,
             "status": "COMPLETED",
-            "coverage_complete": True,
+            "coverage_complete": kind != "incomplete_camera",
             "provenance": "SIMULATED",
         },
         "stops": stops,
         "telemetry": telemetry,
         "passenger_events": events,
+        "camera_roles": ["front"] if kind == "incomplete_camera" else ["front", "rear"],
         "ground_truth": {
             "stop_visits": visits_truth,
             "flow": expected,
-            "unassigned_event_uuids": [f"SIM-v2-{kind}-UNASSIGNED-CONTROL"],
+            "unassigned_event_uuids": [f"SIM-v3-{kind}-UNASSIGNED-CONTROL"],
+            "non_event_controls": ["APPROACH_AND_TURN_BACK_BEFORE_CROSSING"],
+            "non_event_movements": [
+                {
+                    "camera": "front",
+                    "track_id": "front:sim:approach-return",
+                    "sequence": ["OUTSIDE", "A", "OUTSIDE"],
+                    "expected_events": 0,
+                    "reason": "Never reached zone B",
+                }
+            ],
+            "completed_return_pair": {
+                "stop_id": stops[3]["stop_id"],
+                "track_id": "front:sim:4:return:1",
+                "directions": ["IN", "OUT"],
+                "expected_events": 2,
+            },
         },
         "disclaimer": "Not real GPS, not AI output, and not a claim about Route 01 operations.",
     }

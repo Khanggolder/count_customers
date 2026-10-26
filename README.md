@@ -1,12 +1,21 @@
 # BusStop Flow AI
 
-MVP end-to-end đếm khách **lên ở cửa trước (FRONT-IN)** và **xuống ở cửa sau (REAR-OUT)**, rồi tổng hợp theo từng lần xe phục vụ trạm. Đây là giả định vận hành bắt buộc; đơn vị vận tải phải duy trì quy tắc một chiều này khi triển khai. Hệ thống giữ YOLO11n, ByteTrack, MP4/RTSP, FastAPI, SQLite và Streamlit; không có Person Re-ID.
+MVP đếm **IN và OUT độc lập tại cả cửa trước (FRONT) và cửa sau (REAR)**, rồi tổng hợp theo StopVisit. Giữ YOLO + ByteTrack, MP4/RTSP, FastAPI, SQLite và Streamlit; không có Person Re-ID. Đây là hệ thống thử nghiệm, chưa được đo độ chính xác trên cặp camera xe thật có nhãn.
 
-Demo mặc định chạy offline sau khi cài dependency. Scenario v2 tạo chuyến 8 trạm với GPS/tốc độ/cửa và chỉ có event FRONT-IN, REAR-OUT. Mọi màn hình/API đều gắn nhãn `SIMULATED`; đây là kiểm thử nghiệp vụ, không phải độ chính xác AI.
+Demo offline schema v3 tạo chuyến 8 trạm với GPS/tốc độ/cửa và cả bốn hướng FRONT-IN, FRONT-OUT, REAR-IN, REAR-OUT. Mọi màn hình/API gắn nhãn `SIMULATED`; đây là kiểm thử nghiệp vụ, không phải độ chính xác AI.
+
+| Camera | Crossing | Hành khách | `occupancy_delta` |
+| --- | --- | --- | ---: |
+| FRONT | A_TO_B | IN | +1 |
+| FRONT | B_TO_A | OUT | -1 |
+| REAR | A_TO_B | OUT | -1 |
+| REAR | B_TO_A | IN | +1 |
+
+`delta` trong CSV/chế độ tương thích có nghĩa **thay đổi occupancy**, không phải dấu của A→B. Số lượt IN/OUT là số sự kiện riêng, không được khử trừ lẫn nhau. `TOTAL_IN = front_in + rear_in`; `TOTAL_OUT = front_out + rear_out`; occupancy sau trạm = trước trạm + total_in - total_out, chỉ hiện khi cả hai nguồn cùng chuyến, đủ coverage và initial occupancy hợp lệ.
 
 ## Bài toán và phạm vi
 
-Mỗi cửa xe có một camera. YOLO11n phát hiện người, ByteTrack theo dõi và bộ đếm ROI chỉ phát sự kiện khi track đi qua vùng theo chiều hợp lệ. Telemetry GPS/tốc độ/cửa xác định `StopVisit`; sự kiện được gán vào trạm khi có đủ bằng chứng thời gian và nguồn. FastAPI/SQLAlchemy/SQLite lưu và cung cấp dữ liệu, Streamlit hiển thị flow theo chuyến/trạm. Sơ đồ và điều kiện gán chi tiết ở [ARCHITECTURE.md](ARCHITECTURE.md) và [BUSINESS_RULES.md](BUSINESS_RULES.md).
+Mỗi cửa xe có một camera. YOLO phát hiện người, ByteTrack theo dõi và bộ đếm ROI phát sự kiện khi track hoàn tất A→B hoặc B→A. Telemetry GPS/tốc độ/cửa xác định `StopVisit`; sự kiện được gán vào trạm khi có đủ bằng chứng thời gian và nguồn. FastAPI/SQLAlchemy/SQLite lưu và cung cấp dữ liệu, Streamlit hiển thị flow theo chuyến/trạm. Sơ đồ và điều kiện gán chi tiết ở [ARCHITECTURE.md](ARCHITECTURE.md) và [BUSINESS_RULES.md](BUSINESS_RULES.md).
 
 MVP không nhận diện danh tính, Re-ID, dự báo hay điều hành xe. Nó chưa được xác nhận trên hai camera và cảm biến của xe thật; không triển khai công khai trên Internet.
 
@@ -93,7 +102,7 @@ Không cần Roboflow hay sửa YAML bằng tay. Chạy Streamlit như phần tr
 
 1. Chọn **FRONT** hoặc **REAR**. Chọn MP4 trong `data/raw`, upload MP4, nhập đường dẫn MP4, hoặc bấm lấy một frame từ webcam/RTSP được cấp phép. Với MP4, dùng thanh trượt để chọn frame bất kỳ. Camera trực tiếp chỉ dùng để lấy frame hiệu chỉnh; URL RTSP không được ghi vào YAML.
 2. Chọn Zone A hoặc B và **Thêm đỉnh**; click các góc trên ảnh theo thứ tự quanh vùng. Chọn **Dời đỉnh**, chọn đỉnh trong danh sách rồi click đích; có thể thử kéo trực tiếp nếu browser/component hỗ trợ. Có nút xóa đỉnh, hoàn tác, xóa cả vùng và nạp lại cấu hình hiện tại. Bảng dưới ảnh hiển thị tọa độ pixel của frame gốc và normalized `[0, 1]`.
-3. Khi đang vẽ 0–2 đỉnh, ảnh hiển thị điểm và đoạn thẳng mở; vẫn có thể xóa, dời, hoàn tác. Chỉ khi hai polygon có ít nhất ba đỉnh, nằm trong frame, không tự cắt và không chồng lấn, nút **Lưu ROI** và **Test ROI** mới khả dụng. Bản lưu cập nhật đúng camera trong `configs/cameras.yaml`, tạo backup riêng `cameras.yaml.front.bak` hoặc `cameras.yaml.rear.bak` (không commit). Nút **Khôi phục ROI camera này từ bản sao lưu** chỉ phục hồi A/B của camera đang chọn; bản trước khôi phục nằm trong `.pre-restore.bak`. Hãy kiểm tra chiều A → B trên mũi tên: FRONT = IN, REAR = OUT; không đổi chiều nghiệp vụ bằng cách vẽ ngược.
+3. Khi đang vẽ 0–2 đỉnh, ảnh hiển thị điểm và đoạn thẳng mở; vẫn có thể xóa, dời, hoàn tác. Chỉ khi hai polygon có ít nhất ba đỉnh, nằm trong frame, không tự cắt và không chồng lấn, nút **Lưu ROI** và **Test ROI** mới khả dụng. Bản lưu cập nhật đúng camera trong `configs/cameras.yaml`, tạo backup riêng `cameras.yaml.front.bak` hoặc `cameras.yaml.rear.bak` (không commit). Nút **Khôi phục ROI camera này từ bản sao lưu** chỉ phục hồi A/B của camera đang chọn; bản trước khôi phục nằm trong `.pre-restore.bak`. Mũi tên A→B cho biết chiều điển hình; chiều B→A vẫn tạo sự kiện thực tế.
 4. Chọn frame MP4 trên slider, bấm **Test ROI** sau khi lưu. Mặc định test bắt đầu ngay tại frame đang hiển thị; có thể bỏ chọn và nhập frame bắt đầu khác (0-based), rồi chọn số frame (mặc định 90, tối đa 600). Ví dụ chọn frame 450 và 150 frame sẽ xử lý tối đa 450–599; CSV giữ frame index/timestamp gốc và video annotated chỉ gồm đoạn này. Worker dùng YOLO11n + ByteTrack thật; xem progress, frame annotated và tải CSV crossing. Bấm cập nhật tiến độ nếu job đang chạy. Sau đó sang tab **Đếm khách AI**, chọn video và bắt đầu phiên inference mới; phiên này đọc ngay ROI vừa lưu. Mỗi job chụp snapshot YAML khi khởi chạy, nên việc lưu ROI sau đó không đổi cấu hình của worker đó.
 
 Ảnh preview vùng dùng cùng `annotate_frame` của pipeline đếm, cộng màu phủ A/B và mũi tên để dễ hiệu chỉnh. Event trong **Test ROI** là output AI trên đoạn MP4, không phải ground truth hay chỉ số accuracy. Video/camera chưa có nhãn thủ công thì accuracy vẫn **N/A**. Nên chọn frame nơi cửa, lối đi và hướng chuyển động đều rõ; tránh vùng A/B chạm nhau hoặc chứa người đứng yên lâu.
@@ -113,10 +122,12 @@ Tab **Đếm khách AI** là đường demo ngắn nhất và không cần FastA
 
 1. Chạy `.\.venv\Scripts\python.exe -m streamlit run app\dashboard.py` từ gốc repository.
 2. Mở `http://localhost:8501` → **Đếm khách AI**. Chọn MP4 upload/đường dẫn, webcam trên máy chạy Streamlit hoặc RTSP cho cửa trước/sau; có thể chỉ chọn một cửa. `data/raw/in.mp4` và `data/raw/out.mp4` là video cục bộ nếu đã có; chúng không nằm trong Git.
-3. Nhấn **Bắt đầu đếm**. Preview là frame YOLO + ByteTrack đã xử lý (box, Track ID/confidence, điểm neo, Zone A/B, hướng và số lượt), cập nhật theo frame thực. MP4 là **video phát lại**, không phải camera live. Chỉ crossing A→B tạo FRONT-IN hoặc REAR-OUT; bộ đếm không tăng theo thời gian.
+3. Nhấn **Bắt đầu đếm**. Preview là frame YOLO + ByteTrack đã xử lý (box, Track ID/confidence, điểm neo, Zone A/B, hướng và số lượt), cập nhật theo frame thực. MP4 là **video phát lại**, không phải camera live. Mỗi camera hiển thị IN, OUT và thay đổi occupancy ròng riêng. CSV lưu `crossing_direction`, `direction`, `occupancy_delta`; `delta` tương thích có cùng nghĩa với occupancy delta. FRONT A→B là IN, FRONT B→A là OUT, REAR A→B là OUT, REAR B→A là IN.
 4. **Dừng đếm** yêu cầu worker kết thúc sau frame hiện tại, giải phóng nguồn và xuất video H.264 của phần đã xử lý. Sau khi worker dừng, **Đặt lại bộ đếm** chỉ xóa phiên trên màn hình, không xóa file. Kết thúc tự nhiên hiển thị cùng loại kết quả.
 
-Kết quả ở `runs/ai_counting/<session-id>/`: `front/rear_preview.jpg`, `front/rear_annotated.mp4`, `front/rear_events.csv`, `front/rear_progress.json`, `session_summary.json`. Mỗi camera có trạng thái và lỗi riêng; camera không chọn hiển thị “Chưa kết nối”, không coi 0 là quan sát. Phiên này **không tạo Trip, telemetry, StopVisit hoặc gán trạm**. Số liệu là output AI thực trên video được chọn, không phải độ chính xác; accuracy là N/A khi chưa có ground truth. ROI lấy từ `configs/cameras.yaml`; có thể hiệu chỉnh ngay trong tab **Thiết lập vùng đếm (ROI)**. Không có webcam/RTSP vật lý trong test tự động.
+Kết quả ở `runs/ai_counting/<session-id>/`: `front/rear_preview.jpg`, `front/rear_annotated.mp4`, `front/rear_events.csv`, `front/rear_progress.json`, `session_summary.json`. Mỗi camera có trạng thái và lỗi riêng; camera không chọn hiển thị “Chưa kết nối”, không coi 0 là quan sát. Phiên này **không tạo Trip, telemetry, StopVisit hoặc gán trạm**. Số liệu là output AI thực trên video được chọn, không phải độ chính xác; accuracy là N/A khi chưa có ground truth. ROI lấy từ `configs/cameras.yaml`; có thể hiệu chỉnh ngay trong tab **Thiết lập vùng đếm (ROI)**. Không có webcam/RTSP vật lý trong test tự động. `scripts/evaluate.py` báo MAE/accuracy IN, OUT riêng, net MAE và event precision/recall nếu có nhãn thời gian; thiếu nhãn thì N/A.
+
+Luồng **Gắn với chuyến thật** lưu cả hai chiều vào PassengerEvent, với cột crossing, direction và occupancy delta riêng; StopVisit/flow có đủ bốn ô theo cửa và hướng. Phiên đếm độc lập không có telemetry và ghép cặp nguồn nên không tự suy ra occupancy thực hoặc trạm.
 
 Tab **Hai cửa** vẫn giữ luồng cũ cho AI Video Lab và Trip đã xác minh, nhưng mặc định bị ẩn; bật `BUSSTOP_SHOW_ADVANCED_TABS=1` như trên để sử dụng:
 
@@ -176,7 +187,7 @@ RTSP vật lý và telemetry từ xe thật chưa được kiểm thử. Không 
 
 Sửa `configs/cameras.yaml` cho từng góc quay:
 
-- `zone_a`, `zone_b`: polygon normalized; A→B là chiều hợp lệ của từng camera (FRONT-IN, REAR-OUT). B→A bị bỏ khỏi PassengerEvent và không chiếm cooldown. Cấu hình sai camera/hướng bị từ chối.
+- `zone_a`, `zone_b`: polygon normalized; A→B là FRONT-IN hoặc REAR-OUT; B→A là FRONT-OUT hoặc REAR-IN. Cấu hình camera và chiều A→B mâu thuẫn bị từ chối.
 - `anchor_mode`: `bottom_center` hoặc `center`.
 - `min_stable_frames`, `debounce_frames`, `state_ttl_frames`: chống rung/trùng và giới hạn bộ nhớ state.
 - `time_offset_ms`: offset clock riêng camera.
@@ -199,7 +210,7 @@ Lệnh dùng trip hiện có, tạo/kiểm tra `CameraSource`, chạy hai pipeli
 
 Dashboard tab **Hai cửa** (chỉ hiện trong chế độ tab nâng cao) cho chọn trip thật, FRONT/REAR, telemetry, capture start, xem preview/progress và video annotated H.264 sau khi xong. Đây là subprocess cục bộ Windows; không dùng làm dịch vụ inference nhiều người dùng. Các endpoint `/runs` hiện chỉ lưu metadata, chưa phải job queue chạy inference. `runs/` và video không được commit.
 
-Demo chính: `POST /demo/generate` có 8 trạm, 44 event synthetic (43 gán trạm, 1 UNASSIGNED), 18 khách lên/25 khách xuống, occupancy ban đầu 8 và cuối chuyến 1. Đối chứng lỗi riêng: `POST /demo/generate?kind=negative_occupancy`, occupancy ban đầu 0 và có cảnh báo âm. Cả hai đều không phải AI output. Schema v2 dùng trip ID `SIM-R01-v2-20261019-0800`; dữ liệu scenario v1 trong SQLite không bị xóa, replay v1 bị từ chối. Flow/export mới loại các event lịch sử FRONT-OUT/REAR-IN; cột cũ `front_out`/`rear_in` còn trong API để tương thích nhưng luôn 0 trong thống kê hợp lệ.
+Demo chính: `POST /demo/generate` dùng scenario v3, 8 trạm, 48 event synthetic (47 gán trạm, 1 UNASSIGNED), 20 khách lên/27 khách xuống, occupancy ban đầu 8 và cuối chuyến 1. Đối chứng `kind=negative_occupancy` báo âm; `kind=incomplete_camera` chỉ có FRONT và occupancy `N/A`. Đây không phải AI output. Trip v3 là `SIM-R01-v3-20261019-0800`; v1/v2 lịch sử không bị xóa. Flow/export lưu đủ bốn ô front_in/front_out/rear_in/rear_out; bản ghi thiếu hoặc mâu thuẫn crossing phải review trước khi tính.
 
 Gán nhãn thủ công và đánh giá:
 
@@ -208,7 +219,7 @@ Gán nhãn thủ công và đánh giá:
 .\.venv\Scripts\python.exe scripts\evaluate.py --pred runs\trip-001\front_events.csv --gt runs\front_gt.csv --output runs\front_eval.json
 ```
 
-Trong cửa sổ nhãn: `I` = IN, `O` = OUT, `Space` = tạm dừng, `Q` = lưu. Với event timestamps, evaluator ghép 1-1 trong tolerance 1 giây để tính precision/recall, đồng thời tính MAE đếm theo clip/chiều. Không có nhãn thì tất cả metric là `N/A` (`null` trong JSON). Các test dùng `FakeDetector` chỉ chứng minh phần mềm nối đúng, không đo AI accuracy.
+Trong cửa sổ nhãn: `I` = IN, `O` = OUT, `Space` = tạm dừng, `Q` = lưu. Với event timestamps, evaluator ghép 1-1 trong tolerance 1 giây để tính precision/recall. Báo cáo có `mae_in`, `mae_out`, exact-count rate từng chiều và `net_mae`; net MAE bằng 0 không chứng minh đếm đúng. Không có nhãn thì tất cả metric là `N/A` (`null` trong JSON). Các test dùng `FakeDetector` chỉ chứng minh phần mềm nối đúng, không đo AI accuracy.
 
 ## Test
 
@@ -222,6 +233,12 @@ CI Windows/Python 3.11 chạy các lệnh tương tự, không cần GPU/video/c
 
 ## Dữ liệu cũ và hướng tiếp theo
 
-Schema SQLite của phiên bản BusReID trên `main` **không có migration tự động**. Trước khi chuyển môi trường, sao lưu file DB cũ ở vị trí riêng; không trỏ `BUSSTOP_DATABASE_URL` của bản này vào DB cũ. Tạo DB mới bằng `scripts/run_demo.py` hoặc qua API, chỉ nhập dữ liệu thật sau khi kiểm tra provenance và đồng bộ nguồn. Không xóa DB cũ để lấy chỗ.
+Schema SQLite cũ cần migration tường minh. **Dừng API và mọi worker trước khi chạy**; script tự tạo bản sao `.before-bidirectional-<UTC>.bak` cạnh DB, rồi thêm `crossing_direction`, `occupancy_delta`, `direction_status` trong transaction. Chạy một lần cho mỗi DB cũ:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\migrate_bidirectional.py data\busstop_flow.db
+```
+
+Event FRONT-IN/REAR-OUT từ policy cũ được đánh `INFERRED_LEGACY`; event khác không đủ bằng chứng crossing là `REVIEW_REQUIRED`, không tự biến `delta=-1` cũ thành OUT. Không xóa event. Kiểm tra file backup trước khi khởi động API mới. DB mới do SQLAlchemy tạo đã có ba cột này. Nếu DB nằm tại URL khác, truyền đúng đường dẫn `.db` vào script. Không chạy migration khi SQLite đang được ứng dụng ghi.
 
 Ưu tiên tiếp theo: thu thập hai video camera cửa cùng chuyến với GPS/cửa và nhãn thủ công, hiệu chỉnh ROI/clock, đo accuracy, rồi thử RTSP dài hạn và bảo mật trước pilot. Chưa có license riêng được khai báo cho source repository; thư viện và clip công khai tuân theo license của từng nguồn ghi tại [DATA_SOURCES.md](DATA_SOURCES.md).

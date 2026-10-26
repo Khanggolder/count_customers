@@ -26,7 +26,7 @@ class FakeDetector:
         self.index = 0
 
     def track(self, _frame: np.ndarray) -> list[Detection]:
-        y = 25 if self.index < 30 else 80
+        y = 25 if self.index < 30 or self.index >= 45 else 80
         self.index += 1
         return [Detection(f"{self.camera}:fixture:1", (40, y - 20, 60, y), 0.99)]
 
@@ -86,12 +86,14 @@ def test_two_camera_video_to_stop_flow_and_provenance_guard(tmp_path: Path, monk
             )
         )
         db.commit()
-    video = tmp_path / "software_fixture.mp4"
-    fixture_video(video)
+    front_video = tmp_path / "front_software_fixture.mp4"
+    rear_video = tmp_path / "rear_software_fixture.mp4"
+    fixture_video(front_video)
+    fixture_video(rear_video)
     zone_a = [(0, 0), (1, 0), (1, 0.45), (0, 0.45)]
     zone_b = [(0, 0.55), (1, 0.55), (1, 1), (0, 1)]
     cameras = {
-        name: CameraConfig(name, name, direction, str(video), zone_a, zone_b, 2, 4)
+        name: CameraConfig(name, name, direction, str(front_video if name == "front" else rear_video), zone_a, zone_b, 2, 4)
         for name, direction in (("front", Direction.IN), ("rear", Direction.OUT))
     }
     config = AppConfig("sqlite://", DetectorConfig(), cameras)
@@ -120,9 +122,9 @@ def test_two_camera_video_to_stop_flow_and_provenance_guard(tmp_path: Path, monk
     code = run_count.main(
         [
             "--front",
-            str(video),
+            str(front_video),
             "--rear",
-            str(video),
+            str(rear_video),
             "--trip-id",
             "TRIP-1",
             "--recording-start-time",
@@ -137,20 +139,23 @@ def test_two_camera_video_to_stop_flow_and_provenance_guard(tmp_path: Path, monk
     assert code == 0
     with factory() as db:
         events = list(db.scalars(select(PassengerEventModel).order_by(PassengerEventModel.camera)))
-        assert [(item.camera, item.direction, item.assignment_status) for item in events] == [
-            ("FRONT", "IN", "AUTO_ASSIGNED"),
-            ("REAR", "OUT", "AUTO_ASSIGNED"),
-        ]
+        assert {(item.camera, item.crossing_direction, item.direction, item.occupancy_delta, item.assignment_status) for item in events} == {
+            ("FRONT", "A_TO_B", "IN", 1, "AUTO_ASSIGNED"),
+            ("FRONT", "B_TO_A", "OUT", -1, "AUTO_ASSIGNED"),
+            ("REAR", "A_TO_B", "OUT", -1, "AUTO_ASSIGNED"),
+            ("REAR", "B_TO_A", "IN", 1, "AUTO_ASSIGNED"),
+        }
         assert all(item.source_type == "REAL_VIDEO_AI" for item in events)
         assert all(
             item.event_time_utc.replace(tzinfo=timezone.utc) < item.created_at.replace(tzinfo=timezone.utc)
             for item in events
         )
         row = flow_rows(db, "TRIP-1")[0]
-        assert (row["front_in"], row["rear_out"], row["total_in"], row["total_out"]) == (1, 1, 1, 1)
+        assert (row["front_in"], row["front_out"], row["rear_in"], row["rear_out"]) == (1, 1, 1, 1)
+        assert (row["total_in"], row["total_out"]) == (2, 2)
         assert row["onboard_after_stop"] is None  # coverage not independently verified
     summary = json.loads((tmp_path / "output" / "run_summary.json").read_text(encoding="utf-8"))
-    assert summary["aggregation"]["events_assigned"] == 2
+    assert summary["aggregation"]["events_assigned"] == 4
     assert summary["video_model_validation"] == "NO_GROUND_TRUTH_NA"
     try:
         run_count.main(
@@ -189,7 +194,7 @@ def test_real_inference_rejects_synthetic_trip_before_video_work(tmp_path: Path,
                 "--front",
                 str(video),
                 "--trip-id",
-                "SIM-R01-v2-20261019-0800",
+                    "SIM-R01-v3-20261019-0800",
                 "--output",
                 str(tmp_path / "output"),
             ]

@@ -1,24 +1,21 @@
-# Acceptance checklist — 2026-10-24
+# Acceptance checklist — bidirectional MVP (2026-10-26)
 
-## Đã kiểm thử bằng thực thi
+## Đã kiểm tra bằng test phần mềm trên máy
 
-- [x] Hai pipeline MP4 → crossing event → SQLite → telemetry → StopVisit → assignment → flow. Integration test `test_end_to_end.py` dùng video fixture và `FakeDetector`; đây là **software integration**, không phải đo độ chính xác YOLO.
-- [x] Trip/source/camera/provenance không khớp bị từ chối; AI thật không nhập vào synthetic trip; telemetry synthetic không nhập trip thật.
-- [x] GPS missing/stale khi xe dừng và cửa mở không xác nhận rời trạm. RTSP reconnect/timebase được kiểm thử với `VideoCapture` giả; event có capture time riêng processing time.
-- [x] Auto-assign chỉ khi nguồn đã xác nhận đồng bộ, StopVisit confirmed và cửa tương ứng có mẫu mở gần event. Thiếu chứng cứ cửa: `REVIEW_REQUIRED`. Video công khai không GPS cùng nguồn: `UNASSIGNED`.
-- [x] Counting chỉ phát FRONT-IN/REAR-OUT; reverse không chiếm cooldown. API từ chối cặp sai với 422; bản ghi lịch sử sai chiều được giữ nhưng không vào flow/export/occupancy.
-- [x] Demo schema v2 có 8 StopVisit, 44 event synthetic (43 gán trạm, 1 UNASSIGNED), 18 FRONT-IN/25 REAR-OUT, initial occupancy 8, cuối chuyến 1 và không âm. Kịch bản đối chứng âm tách riêng qua `kind=negative_occupancy`; v1 không bị xóa.
-- [x] Có tool gán nhãn video cục bộ và evaluator MAE + precision/recall theo timestamp; không có ground truth thì `N/A`. Metric evaluator có unit test, thao tác GUI gán nhãn chưa được kiểm thử tự động.
-- [x] AI Video Lab nhận upload/đường dẫn MP4 hoặc RTSP cho một/hai camera, chạy độc lập với Trip synthetic. Preview JPEG, frame/FPS/counter, timeline, cancel marker và video annotated H.264 có test phần mềm; AppTest render sáu tab và video output, 0 exception.
-- [x] Output H.264 được kiểm tra frame/codec trước COMPLETED; thiếu encoder hoặc video lỗi thành FAILED. Fixture dùng FakeDetector, không đo AI accuracy.
-- [x] Nhánh AI Video Lab: 56 passed, coverage 87%, Ruff và `pip check` đạt. Cleanup trước đó đạt 48 passed/88%; xem `TEST_REPORT.md`.
-- [x] GitHub Actions Windows/Python 3.11 đã chạy xanh tại commit `6f4aec9`; run được liên kết trong `TEST_REPORT.md`.
-- [x] YOLO+ByteTrack chạy 40 frame Pexels trên RTX 3050 (2.8972 FPS), thêm smoke hai worker 10+10 frame cùng clip: 0 crossing, không có ground truth, không tự gán trạm. Hai worker cùng clip không phải hai camera thật.
+- [x] FRONT A→B = IN +1, B→A = OUT -1; REAR A→B = OUT -1, B→A = IN +1. IN/OUT là số lượt độc lập; `delta` tương thích nghĩa là occupancy delta.
+- [x] Debounce, stable transition, boundary jitter, đổi Track ID và crossing sau khi quay lại có unit tests; cùng chiều và ngược chiều liên tiếp không bị triệt tiêu.
+- [x] Hai MP4 fixture qua FakeDetector → event bốn tổ hợp → SQLite → telemetry đồng bộ → StopVisit → flow. Đây là **software integration**, không phải đo AI accuracy.
+- [x] API chấp nhận bốn tổ hợp, từ chối camera/source/trip/provenance hoặc crossing/direction/delta mâu thuẫn; UUID/replay idempotent. Manual direction verification tạo audit.
+- [x] SQLite migration sao lưu trước, suy ra forward event từ policy cũ, giữ ambiguous legacy ở `REVIEW_REQUIRED`; không xóa bản ghi. Test có backup và chạy lại.
+- [x] Flow/export có front_in, front_out, rear_in, rear_out, total_in, total_out, occupancy. Demo v3: 8 StopVisit, 48 event synthetic (47 assigned), 20 IN, 27 OUT, initial 8 → final 1, không âm. Scenario âm và camera thiếu tách riêng; camera thiếu → occupancy N/A.
+- [x] GPS missing/stale không gây departure giả; door evidence/clock/provenance được kiểm tra trước auto-assignment. Video công khai không GPS cùng nguồn giữ UNASSIGNED.
+- [x] Dashboard và ROI Editor có AppTest/helper tests; preview/counter/timeline dùng IN, OUT và occupancy delta; lưu ROI chỉ áp dụng phiên worker mới.
+- [x] Evaluator có MAE/accuracy IN, OUT riêng, net MAE, timed-event precision/recall. Test 10 IN/10 OUT so với 5 IN/5 OUT cho net MAE = 0 nhưng hai MAE đếm = 5. Thiếu nhãn → N/A.
+- [x] `pytest`, `ruff check .`, `pip check` chạy trên local; kết quả thực tế ở `TEST_REPORT.md`.
 
-## Chưa kiểm chứng, không nhận là hoàn thành thực địa
+## Chưa xác minh ngoài test phần mềm
 
-- [ ] Hai camera thật cùng một chuyến với GPS/cửa thật và ground truth gán nhãn: chưa có dữ liệu.
-- [ ] RTSP vật lý, reconnect nhiều giờ, sai số đồng hồ thiết bị, tải đồng thời dài hạn: chưa có endpoint để thử. Test hiện dùng fake capture.
-- [ ] AI accuracy/MAE/precision/recall trên video cửa xe thật có nhãn: `N/A`.
-- [ ] Browser E2E upload → chạy → phát video trên máy triển khai và GUI labeling chưa được xác nhận; AppTest và helper tests không thay thế kiểm thử trình duyệt.
-- [ ] Occupancy thật: không hiển thị nếu coverage/ghép cặp chưa xác nhận.
+- [ ] Cặp camera vật lý trên cùng xe/chuyến với GPS/door sensor thật và ground truth: chưa có. Không công bố accuracy AI hoặc occupancy thật.
+- [ ] RTSP vật lý/reconnect dài hạn, lệch đồng hồ thực tế, mật độ đông/occlusion: chưa thử; RTSP fake capture có test.
+- [ ] Browser E2E thao tác người dùng upload → inference → video/ROI click/drag: AppTest không thay thế browser test.
+- [ ] Bảo mật production: chưa có auth/TLS/RBAC/retention; chỉ chạy local MVP.

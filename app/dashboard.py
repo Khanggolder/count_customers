@@ -80,8 +80,8 @@ with overview_tab:
         total_out = sum(row["total_out"] for row in flow)
         assigned_stops = sum(row["visit_status"] == "CONFIRMED" for row in flow)
         cols = st.columns(4)
-        cols[0].metric("Khách lên · cửa trước", total_in)
-        cols[1].metric("Khách xuống · cửa sau", total_out)
+        cols[0].metric("Tổng khách lên · hai cửa", total_in)
+        cols[1].metric("Tổng khách xuống · hai cửa", total_out)
         cols[2].metric("Trạm xác nhận", f"{assigned_stops}/{len(flow)}")
         cols[3].metric("Ghép nguồn", trip["mode"])
         if flow:
@@ -100,6 +100,8 @@ with overview_tab:
                         "sequence",
                         "stop_name",
                         "front_in",
+                        "front_out",
+                        "rear_in",
                         "rear_out",
                         "boarding_count",
                         "alighting_count",
@@ -143,7 +145,7 @@ with events_tab:
         invalid_history = sum(not row.get("policy_valid", True) for row in events)
         if invalid_history:
             st.warning(
-                f"{invalid_history} event lịch sử sai chiều: giữ để kiểm toán, không tính vào lưu lượng/occupancy."
+                f"{invalid_history} event thiếu hoặc mâu thuẫn hướng: giữ để kiểm toán, không tính vào flow/occupancy."
             )
         statuses = ["ALL", "AUTO_ASSIGNED", "MANUAL_ASSIGNED", "REVIEW_REQUIRED", "UNASSIGNED"]
         selected_status = st.selectbox("Trạng thái gán trạm", statuses)
@@ -191,7 +193,7 @@ with events_tab:
 with demo_tab:
     st.error("DỮ LIỆU MÔ PHỎNG / SIMULATED EVENTS")
     st.write(
-        "Kịch bản tám trạm có GPS, tốc độ và cảm biến cửa. Chỉ FRONT-IN và REAR-OUT là sự kiện khách hợp lệ. Đây là dữ liệu mô phỏng, không phải kết quả AI."
+        "Kịch bản tám trạm có GPS, tốc độ, cảm biến cửa và cả bốn hướng FRONT-IN/OUT, REAR-IN/OUT. Đây là dữ liệu mô phỏng, không phải kết quả AI."
     )
     if st.button("Tạo hoặc replay chuyến mẫu", type="primary"):
         result = api("POST", "/demo/generate")
@@ -204,7 +206,7 @@ with demo_tab:
             st.warning(f"Đã tạo kịch bản đối chứng: {result['trip_id']}")
             st.rerun()
     st.markdown(
-        "Các ca đối chứng: dừng đèn đỏ gần trạm nhưng cửa đóng; tốc độ 0 ngoài geofence; cửa mở ngoài trạm; GPS mất; event ngoài StopVisit. Chuyển động sai chiều không sinh PassengerEvent."
+        "Đối chứng: dừng đèn đỏ, cửa mở ngoài geofence, GPS mất, event ngoài StopVisit. Cả hai chiều crossing đều có thể tạo PassengerEvent."
     )
 
 with settings_tab:

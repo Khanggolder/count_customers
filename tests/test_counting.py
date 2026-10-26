@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from busreid.counting import DirectionCounter
-from busreid.types import Detection, Direction
+from busreid.types import CrossingDirection, Detection, Direction
 
 SHAPE = (100, 100, 3)
 ZONE_A = [(0, 0), (1, 0), (1, 0.45), (0, 0.45)]
@@ -34,28 +34,33 @@ def test_standing_at_threshold_is_not_counted() -> None:
     assert feed(counter, "front:track00001", [50] * 20) == []
 
 
-def test_front_reverse_direction_does_not_emit_out() -> None:
+def test_front_reverse_is_out_and_decreases_occupancy() -> None:
     counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 2, 2)
     events = feed(counter, "front:track00001", [80, 80, 50, 50, 20, 20])
-    assert events == []
+    assert [(event.crossing_direction, event.direction, event.delta) for event in events] == [
+        (CrossingDirection.B_TO_A, Direction.OUT, -1)
+    ]
 
 
-def test_rear_reverse_direction_does_not_emit_in() -> None:
+def test_rear_reverse_is_in_and_increases_occupancy() -> None:
     counter = DirectionCounter("rear", ZONE_A, ZONE_B, Direction.OUT, 2, 2)
-    assert feed(counter, "rear:track00001", [80, 80, 50, 50, 20, 20]) == []
+    events = feed(counter, "rear:track00001", [80, 80, 50, 50, 20, 20])
+    assert [(event.crossing_direction, event.direction, event.delta) for event in events] == [
+        (CrossingDirection.B_TO_A, Direction.IN, 1)
+    ]
 
 
 def test_counter_rejects_wrong_camera_policy() -> None:
-    with pytest.raises(ValueError, match="accepts only IN"):
+    with pytest.raises(ValueError, match="calibration"):
         DirectionCounter("front", ZONE_A, ZONE_B, Direction.OUT)
-    with pytest.raises(ValueError, match="accepts only OUT"):
+    with pytest.raises(ValueError, match="calibration"):
         DirectionCounter("rear", ZONE_A, ZONE_B, Direction.IN)
 
 
-def test_reverse_then_forward_does_not_consume_cooldown() -> None:
+def test_reverse_then_forward_are_both_counted_inside_cooldown() -> None:
     counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 1, 20)
     events = feed(counter, "front:track00001", [80, 20, 80])
-    assert [event.direction for event in events] == [Direction.IN]
+    assert [event.delta for event in events] == [-1, 1]
 
 
 def test_approach_then_turn_back_is_not_counted() -> None:
@@ -63,10 +68,17 @@ def test_approach_then_turn_back_is_not_counted() -> None:
     assert feed(counter, "front:track00001", [20, 20, 50, 50, 20, 20]) == []
 
 
-def test_oscillation_debounced() -> None:
+def test_alternating_crossings_adjust_net_count() -> None:
     counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 1, 10)
     events = feed(counter, "front:track00001", [20, 80, 20, 80, 20])
-    assert len(events) == 1
+    assert [event.delta for event in events] == [1, -1, 1, -1]
+    assert sum(event.delta for event in events) == 0
+
+
+def test_return_after_crossing_records_real_opposite_direction() -> None:
+    counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 1, 10)
+    events = feed(counter, "front:track00001", [80, 20, 80])
+    assert [event.direction for event in events] == [Direction.OUT, Direction.IN]
 
 
 def test_multiple_people_are_independent() -> None:
@@ -79,6 +91,20 @@ def test_multiple_people_are_independent() -> None:
                 events.append(event)
     assert len(events) == 2
     assert {event.track_id for event in events} == {"front:track00001", "front:track00002"}
+
+
+def test_two_people_crossing_opposite_directions_are_independent() -> None:
+    counter = DirectionCounter("front", ZONE_A, ZONE_B, Direction.IN, 1, 20)
+    events = []
+    for frame, positions in enumerate(((20, 80), (80, 20))):
+        for track, y in zip(("front:in", "front:out"), positions, strict=True):
+            event = counter.update(det(track, y), SHAPE, frame, float(frame))
+            if event:
+                events.append(event)
+    assert {(event.track_id, event.direction, event.occupancy_delta) for event in events} == {
+        ("front:in", Direction.IN, 1),
+        ("front:out", Direction.OUT, -1),
+    }
 
 
 def test_camera_namespaces_do_not_collide() -> None:

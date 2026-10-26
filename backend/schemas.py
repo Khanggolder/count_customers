@@ -47,11 +47,21 @@ class AssignmentPatch(BaseModel):
     reason: str = Field(min_length=3, max_length=1000)
 
 
+class EventDirectionPatch(BaseModel):
+    crossing_direction: Literal["A_TO_B", "B_TO_A"]
+    direction: Literal["IN", "OUT"]
+    occupancy_delta: Literal[-1, 1]
+    actor: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=3, max_length=1000)
+
+
 class PassengerEventCreate(BaseModel):
     event_uuid: str = Field(min_length=8, max_length=100)
     source_id: str = Field(min_length=1, max_length=100)
     camera: Literal["FRONT", "REAR"]
+    crossing_direction: Literal["A_TO_B", "B_TO_A"]
     direction: Literal["IN", "OUT"]
+    occupancy_delta: Literal[-1, 1]
     track_id: str = Field(min_length=1, max_length=100)
     video_frame: int | None = Field(default=None, ge=0)
     source_pts: float | None = Field(default=None, ge=0)

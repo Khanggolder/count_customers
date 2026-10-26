@@ -73,7 +73,7 @@ def test_roi_segment_uses_absolute_frame_and_timestamp(
         capture.release()
 
 
-def test_no_fake_crossing_without_two_zone_transition(tmp_path: Path) -> None:
+def test_seeked_reverse_crossing_records_negative_delta(tmp_path: Path) -> None:
     video = tmp_path / "fixture.mp4"
     make_fixture(video)
     camera = CameraConfig(
@@ -87,7 +87,7 @@ def test_no_fake_crossing_without_two_zone_transition(tmp_path: Path) -> None:
         str(video), tmp_path / "reverse", max_frames=4, start_frame=4
     )
     assert result.frames == 4
-    assert result.events == []
+    assert [event.delta for event in result.events] == [-1]
 
 
 def test_seek_rejects_out_of_range_and_non_mp4(tmp_path: Path) -> None:

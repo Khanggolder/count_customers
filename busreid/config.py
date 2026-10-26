@@ -5,8 +5,8 @@ from pathlib import Path
 
 import yaml
 
-from .business import validate_passenger_direction
-from .types import Direction
+from .business import expected_direction
+from .types import CrossingDirection, Direction
 
 
 @dataclass(slots=True)
@@ -56,7 +56,8 @@ def load_config(path: str | Path = "configs/cameras.yaml") -> AppConfig:
     for name, value in raw["cameras"].items():
         if value["role"].upper() != name.upper():
             raise ValueError(f"Camera {name} role must match its FRONT/REAR identity")
-        validate_passenger_direction(name, value["event_direction"])
+        if Direction(value["event_direction"]) != expected_direction(name, CrossingDirection.A_TO_B):
+            raise ValueError(f"Camera {name} A_TO_B direction conflicts with calibration")
         cameras[name] = CameraConfig(
             name=name,
             role=value["role"],

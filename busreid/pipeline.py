@@ -149,10 +149,10 @@ def annotate_frame(
     cv2.rectangle(
         output, (0, 0), (min(frame.shape[1], round(530 * scale)), round(42 * scale)), (10, 17, 30), -1
     )
-    label = "FRONT - BOARDING / IN" if camera.name.lower() == "front" else "REAR - ALIGHTING / OUT"
+    label = f"{camera.name.upper()} IN {counts['IN']} OUT {counts['OUT']} NET {counts['IN'] - counts['OUT']:+d}"
     cv2.putText(
         output,
-        f"{label}: {counts[camera.event_direction.value]}",
+        label,
         (origin, round(28 * scale)),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7 * scale,
@@ -164,8 +164,10 @@ def annotate_frame(
     if options.events and shown_events:
         cv2.putText(
             output,
-            f"+{len(shown_events)} {camera.event_direction.value}  "
-            + ", ".join(item.track_id for item in shown_events[:2]),
+            ", ".join(
+                f"{camera.name.upper()} {item.direction.value} {item.occupancy_delta:+d} {item.track_id}"
+                for item in shown_events[:2]
+            ),
             (origin, min(frame.shape[0] - round(30 * scale), round(78 * scale))),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8 * scale,
@@ -180,7 +182,10 @@ def _write_events(path: Path, events: list[CrossingEvent]) -> None:
     fields = [
         "camera",
         "track_id",
+        "crossing_direction",
         "direction",
+        "occupancy_delta",
+        "delta",
         "frame_index",
         "timestamp_s",
         "confidence",
@@ -195,7 +200,9 @@ def _write_events(path: Path, events: list[CrossingEvent]) -> None:
         writer.writeheader()
         for event in events:
             row = asdict(event)
+            row["crossing_direction"] = event.crossing_direction.value
             row["direction"] = event.direction.value
+            row["delta"] = event.occupancy_delta
             row["created_at"] = event.created_at.isoformat()
             row["capture_time_utc"] = event.capture_time_utc.isoformat() if event.capture_time_utc else ""
             writer.writerow(row)
@@ -204,7 +211,10 @@ def _write_events(path: Path, events: list[CrossingEvent]) -> None:
 
 class CameraPipeline:
     def __init__(
-        self, camera: CameraConfig, config: AppConfig, detector: PersonDetector | None = None
+        self,
+        camera: CameraConfig,
+        config: AppConfig,
+        detector: PersonDetector | None = None,
     ) -> None:
         validate_passenger_direction(camera.name, camera.event_direction)
         self.camera = camera
@@ -476,6 +486,7 @@ class CameraPipeline:
                     "device": result.device,
                     "peak_vram_mb": result.peak_vram_mb,
                     "counts": counts,
+                    "occupancy_delta": counts["IN"] - counts["OUT"],
                     "metadata": asdict(metadata),
                     "result_kind": "REAL_INFERENCE",
                     "status": result.status,

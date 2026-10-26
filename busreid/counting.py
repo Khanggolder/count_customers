@@ -6,8 +6,8 @@ from enum import StrEnum
 import cv2
 import numpy as np
 
-from .business import validate_passenger_direction
-from .types import CrossingEvent, Detection, Direction
+from .business import expected_direction, occupancy_change
+from .types import CrossingDirection, CrossingEvent, Detection, Direction
 
 
 class Zone(StrEnum):
@@ -23,6 +23,7 @@ class TrackState:
     candidate_frames: int = 0
     origin_zone: Zone = Zone.NONE
     last_event_frame: int = -1_000_000
+    last_crossing_sign: int = 0
     seen_zones: list[Zone] = field(default_factory=list)
     last_seen_frame: int = -1
     last_point: tuple[float, float] | None = None
@@ -51,7 +52,8 @@ class DirectionCounter:
     ) -> None:
         if min_stable_frames < 1:
             raise ValueError("min_stable_frames phải >= 1")
-        validate_passenger_direction(camera, forward_direction)
+        if forward_direction != expected_direction(camera, CrossingDirection.A_TO_B):
+            raise ValueError(f"Camera {camera} A_TO_B direction conflicts with calibration")
         self.camera = camera
         self.zone_a_normalized = zone_a
         self.zone_b_normalized = zone_b
@@ -135,18 +137,20 @@ class DirectionCounter:
                 state.origin_zone = zone
             return None
         state.origin_zone = zone
-        if frame_index - state.last_event_frame < self.debounce_frames:
+        crossing = CrossingDirection.A_TO_B if origin == Zone.A and zone == Zone.B else CrossingDirection.B_TO_A
+        crossing_sign = 1 if crossing == CrossingDirection.A_TO_B else -1
+        if crossing_sign == state.last_crossing_sign and frame_index - state.last_event_frame < self.debounce_frames:
             return None
 
-        forward = origin == Zone.A and zone == Zone.B
-        if not forward:
-            # Reverse travel is not a passenger event and must not consume cooldown.
-            return None
         state.last_event_frame = frame_index
+        state.last_crossing_sign = crossing_sign
+        direction = expected_direction(self.camera, crossing)
         return CrossingEvent(
             camera=self.camera,
             track_id=detection.track_id,
-            direction=self.forward_direction,
+            crossing_direction=crossing,
+            direction=direction,
+            occupancy_delta=occupancy_change(direction),
             frame_index=frame_index,
             timestamp_s=timestamp_s,
             confidence=detection.confidence,

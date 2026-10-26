@@ -17,7 +17,7 @@ from backend.models import (
     TelemetrySampleModel,
     TripModel,
 )
-from busreid.business import validate_passenger_direction
+from busreid.business import occupancy_change, validate_passenger_direction
 from busreid.stop_detection import StopPoint, StopVisitDetector, TelemetryPoint, assign_visit
 
 
@@ -123,7 +123,11 @@ def detect_and_assign(db: Session, trip_id: str) -> dict:
     )
     for event in events:
         try:
-            validate_passenger_direction(event.camera, event.direction)
+            if event.direction_status == "REVIEW_REQUIRED" or event.crossing_direction is None:
+                continue
+            validate_passenger_direction(
+                event.camera, event.direction, event.crossing_direction, event.occupancy_delta
+            )
         except ValueError:
             # Retain legacy rows for audit without assigning or counting them.
             continue
@@ -171,13 +175,18 @@ def detect_and_assign(db: Session, trip_id: str) -> dict:
 
 
 def replay_scenario(db: Session, scenario: dict) -> dict:
-    if scenario.get("schema_version") != "2.0":
-        raise ValueError("Only FRONT-IN/REAR-OUT scenario schema 2.0 may be replayed")
+    version = scenario.get("schema_version")
+    if version not in {"2.0", "3.0"}:
+        raise ValueError("Only scenario schema 2.0 or 3.0 may be replayed")
     route_data, trip_data = scenario["route"], scenario["trip"]
     if trip_data["provenance"] != "SIMULATED":
         raise ValueError("Scenario trip must be SIMULATED")
     for item in scenario["passenger_events"]:
-        validate_passenger_direction(item["camera"], item["direction"])
+        crossing = item.get("crossing_direction") if version == "3.0" else "A_TO_B"
+        delta = item.get("occupancy_delta") if version == "3.0" else occupancy_change(item["direction"])
+        if crossing is None or delta is None:
+            raise ValueError("Scenario crossing_direction and occupancy_delta are required")
+        validate_passenger_direction(item["camera"], item["direction"], crossing, delta)
         if item["source_type"] != "SIMULATED_EVENT_GENERATOR" or item["provenance"] != "SIMULATED_EVENTS":
             raise ValueError("Scenario event must retain synthetic provenance")
     route = db.get(RouteModel, route_data["route_id"])
@@ -200,9 +209,9 @@ def replay_scenario(db: Session, scenario: dict) -> dict:
         db.add(trip)
     elif trip.provenance != "SIMULATED":
         raise ValueError("Scenario cannot be replayed into a real trip")
-    elif trip.mode != "SYNTHETIC_PAIRED" or trip.initial_occupancy != trip_data["initial_occupancy"]:
-        raise ValueError("Existing scenario trip metadata conflicts with schema 2.0")
-    for camera in ("front", "rear"):
+    elif trip.mode != trip_data["mode"] or trip.initial_occupancy != trip_data["initial_occupancy"]:
+        raise ValueError("Existing scenario trip metadata conflicts with schema")
+    for camera in scenario.get("camera_roles", ("front", "rear")):
         source_id = f"{trip_data['trip_id']}:{camera}:sim"
         if db.get(CameraSourceModel, source_id) is None:
             db.add(
@@ -213,7 +222,7 @@ def replay_scenario(db: Session, scenario: dict) -> dict:
                     input_type="SIMULATION",
                     safe_uri="simulation://generated",
                     calibration_id=f"{camera}-default",
-                    paired_flag="SYNTHETIC_PAIRED",
+                    paired_flag="SYNTHETIC_PAIRED" if trip_data["coverage_complete"] else "UNPAIRED",
                     time_offset_ms=0,
                 )
             )
@@ -300,7 +309,10 @@ def replay_scenario(db: Session, scenario: dict) -> dict:
                 trip_id=trip.trip_id,
                 source_id=f"{trip.trip_id}:{item['camera']}:sim",
                 camera=item["camera"].upper(),
+                crossing_direction=item.get("crossing_direction", "A_TO_B"),
                 direction=item["direction"],
+                occupancy_delta=item.get("occupancy_delta", occupancy_change(item["direction"])),
+                direction_status="SIMULATED_GROUND_TRUTH" if version == "3.0" else "INFERRED_LEGACY",
                 track_id=item["track_id"],
                 video_frame=item["video_frame"],
                 source_pts=item["source_pts"],
@@ -338,10 +350,22 @@ def flow_rows(db: Session, trip_id: str) -> list[dict]:
     sources = list(db.scalars(select(CameraSourceModel).where(CameraSourceModel.trip_id == trip_id)))
     required_flag = "SYNTHETIC_PAIRED" if trip.provenance == "SIMULATED" else "PAIRED_VERIFIED"
     paired_roles = {source.door_role for source in sources if source.paired_flag == required_flag}
+    def direction_is_trusted(event: PassengerEventModel) -> bool:
+        if event.direction_status == "REVIEW_REQUIRED" or event.crossing_direction is None:
+            return False
+        try:
+            validate_passenger_direction(
+                event.camera, event.direction, event.crossing_direction, event.occupancy_delta
+            )
+        except ValueError:
+            return False
+        return event.occupancy_delta is not None
+
     occupancy_valid = (
         trip.mode in {"PAIRED_VERIFIED", "SYNTHETIC_PAIRED"}
         and trip.coverage_complete
         and paired_roles == {"FRONT", "REAR"}
+        and all(direction_is_trusted(event) for event in events)
     )
     occupancy = trip.initial_occupancy
     rows = []
@@ -353,11 +377,11 @@ def flow_rows(db: Session, trip_id: str) -> list[dict]:
                 if (
                     event.stop_visit_id == visit.stop_visit_id
                     and event.assignment_status in {"AUTO_ASSIGNED", "MANUAL_ASSIGNED"}
-                    and (event.camera, event.direction) in {("FRONT", "IN"), ("REAR", "OUT")}
+                    and direction_is_trusted(event)
                 ):
                     counts[f"{event.camera.lower()}_{event.direction.lower()}"] += 1
-        total_in = counts["front_in"]
-        total_out = counts["rear_out"]
+        total_in = counts["front_in"] + counts["rear_in"]
+        total_out = counts["front_out"] + counts["rear_out"]
         warning = None
         onboard = None
         if occupancy_valid:
@@ -396,7 +420,11 @@ def update_assignment(
     validate_event_source(
         db, event.trip_id, event.source_id, event.camera, event.provenance, event.source_type
     )
-    validate_passenger_direction(event.camera, event.direction)
+    if event.direction_status == "REVIEW_REQUIRED" or event.crossing_direction is None:
+        raise ValueError("Event direction needs review before assignment")
+    validate_passenger_direction(
+        event.camera, event.direction, event.crossing_direction, event.occupancy_delta
+    )
     if stop_visit_id is not None:
         visit = db.get(StopVisitModel, stop_visit_id)
         if visit is None or visit.trip_id != event.trip_id:
@@ -405,6 +433,38 @@ def update_assignment(
     event.stop_visit_id = stop_visit_id
     event.assignment_status = "MANUAL_ASSIGNED" if stop_visit_id else "UNASSIGNED"
     after = {"stop_visit_id": event.stop_visit_id, "assignment_status": event.assignment_status}
+    db.add(ReviewAuditModel(actor=actor, record_id=str(event.id), before=before, after=after, reason=reason))
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def update_event_direction(
+    db: Session,
+    event_id: int,
+    crossing_direction: str,
+    direction: str,
+    occupancy_delta: int,
+    actor: str,
+    reason: str,
+) -> PassengerEventModel:
+    event = db.get(PassengerEventModel, event_id)
+    if event is None:
+        raise KeyError(event_id)
+    validate_event_source(db, event.trip_id, event.source_id, event.camera, event.provenance, event.source_type)
+    validate_passenger_direction(event.camera, direction, crossing_direction, occupancy_delta)
+    before = {
+        "crossing_direction": event.crossing_direction,
+        "direction": event.direction,
+        "occupancy_delta": event.occupancy_delta,
+        "direction_status": event.direction_status,
+    }
+    event.crossing_direction = crossing_direction
+    event.direction = direction
+    event.occupancy_delta = occupancy_delta
+    event.direction_status = "MANUALLY_VERIFIED"
+    after = {**before, "crossing_direction": crossing_direction, "direction": direction,
+             "occupancy_delta": occupancy_delta, "direction_status": event.direction_status}
     db.add(ReviewAuditModel(actor=actor, record_id=str(event.id), before=before, after=after, reason=reason))
     db.commit()
     db.refresh(event)

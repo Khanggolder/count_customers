@@ -11,10 +11,7 @@ import streamlit as st
 
 from .video_lab import camera_status, event_timeline, first_frame, new_job_dir, resolve_source, start_job
 
-_DIRECTIONS = {
-    "front": ("Cửa trước – Khách lên", "IN", "Khách đã lên"),
-    "rear": ("Cửa sau – Khách xuống", "OUT", "Khách đã xuống"),
-}
+_DIRECTIONS = {"front": "Cửa trước · FRONT", "rear": "Cửa sau · REAR"}
 _STATUS = {
     "QUEUED": "Đang khởi động",
     "RUNNING": "Đang xử lý AI",
@@ -86,7 +83,7 @@ def _camera_progress(job: dict | None, camera: str) -> dict | None:
 
 
 def _camera_view(job: dict | None, camera: str) -> dict | None:
-    title, direction, counter_label = _DIRECTIONS[camera]
+    title = _DIRECTIONS[camera]
     with st.container(border=True):
         st.subheader(title)
         progress = _camera_progress(job, camera)
@@ -94,17 +91,29 @@ def _camera_view(job: dict | None, camera: str) -> dict | None:
             st.info("Chưa kết nối · chưa có kết quả quan sát từ cửa này.")
             return None
         state = progress.get("status", "QUEUED")
-        st.caption(f"{_STATUS.get(state, state)} · chỉ đếm {direction} theo A → B")
-        count = int(progress.get("counts", {}).get(direction, 0))
+        st.caption(f"{_STATUS.get(state, state)} · A → B và B → A đều tạo lượt IN/OUT thực tế")
+        counts = progress.get("counts", {})
+        count_in, count_out = int(counts.get("IN", 0)), int(counts.get("OUT", 0))
         has_frames = int(progress.get("frames", 0)) > 0
-        st.metric(counter_label, count if has_frames else "Chưa có frame")
+        metrics = st.columns(3)
+        metrics[0].metric("Khách lên · IN", count_in if has_frames else "Chưa có frame")
+        metrics[1].metric("Khách xuống · OUT", count_out if has_frames else "Chưa có frame")
+        metrics[2].metric("Chênh lệch ròng", count_in - count_out if has_frames else "Chưa có frame")
         output = job["output"]
         recent = event_timeline(output, [camera])
         if recent and recent[-1]["created_at"]:
             try:
                 event_time = datetime.fromisoformat(recent[-1]["created_at"])
                 if 0 <= (datetime.now(timezone.utc) - event_time).total_seconds() <= 5:
-                    st.success(f"{direction} +1 · Track {recent[-1]['track_id']}")
+                    event = recent[-1]
+                    if event["occupancy_delta"] is None:
+                        st.warning("CSV cũ có delta âm nhưng thiếu hướng crossing; cần review.")
+                    elif event["occupancy_delta"] > 0:
+                        message = f"{camera.upper()} {event['direction']} +1 · Track {event['track_id']}"
+                        st.success(message)
+                    else:
+                        message = f"{camera.upper()} {event['direction']} -1 · Track {event['track_id']}"
+                        st.warning(message)
             except (TypeError, ValueError):
                 pass
         preview = output / f"{camera}_preview.jpg"
@@ -145,33 +154,37 @@ def _results(job: dict | None) -> None:
         front = _camera_view(job, "front")
     with right:
         rear = _camera_view(job, "rear")
-    total_in = int(front.get("counts", {}).get("IN", 0)) if front and front.get("frames", 0) else None
-    total_out = int(rear.get("counts", {}).get("OUT", 0)) if rear and rear.get("frames", 0) else None
-    metrics = st.columns(3)
+    observed = [item for item in (front, rear) if item and item.get("frames", 0)]
+    total_in = sum(int(item.get("counts", {}).get("IN", 0)) for item in observed) if observed else None
+    total_out = sum(int(item.get("counts", {}).get("OUT", 0)) for item in observed) if observed else None
+    metrics = st.columns(4)
     metrics[0].metric(
-        "Tổng khách lên", total_in if total_in is not None else "Chưa có frame" if front else "Chưa kết nối"
+        "Tổng khách lên", total_in if total_in is not None else "Chưa có frame" if front or rear else "Chưa kết nối"
     )
     metrics[1].metric(
         "Tổng khách xuống",
-        total_out if total_out is not None else "Chưa có frame" if rear else "Chưa kết nối",
+        total_out if total_out is not None else "Chưa có frame" if front or rear else "Chưa kết nối",
     )
     metrics[2].metric(
-        "Tổng lượt ghi nhận",
-        (total_in or 0) + (total_out or 0)
+        "Chênh lệch ròng",
+        (total_in or 0) - (total_out or 0)
         if total_in is not None or total_out is not None
         else "Chưa có frame",
     )
+    metrics[3].metric("Số khách trên xe", "N/A · không có Trip/coverage")
+    if len(observed) == 1:
+        st.warning("Chỉ có một camera: tổng IN/OUT là phần quan sát được, không phải toàn bộ chuyến.")
     if not job:
         return
     rows = event_timeline(job["output"], list(job["sources"]))
     if rows:
         st.markdown("#### Sự kiện đi qua cửa")
         st.dataframe(
-            pd.DataFrame(rows)[["camera", "timestamp", "frame_index", "direction", "track_id"]],
+            pd.DataFrame(rows)[["camera", "timestamp", "frame_index", "crossing_direction", "direction", "occupancy_delta", "track_id"]],
             use_container_width=True,
             hide_index=True,
         )
-        identities = [(row["camera"], row["track_id"]) for row in rows]
+        identities = [(row["camera"], row["track_id"], row["crossing_direction"]) for row in rows]
         if len(identities) != len(set(identities)):
             st.warning("Có Track ID được đếm nhiều lần; cần xem lại video/ROI trước khi kết luận số khách.")
     elif job["process"].poll() is not None:
@@ -180,7 +193,7 @@ def _results(job: dict | None) -> None:
 
 def render_counting_tab(root: Path) -> None:
     st.subheader("Đếm khách AI")
-    st.caption("YOLO11n + ByteTrack · FRONT chỉ IN · REAR chỉ OUT · không cần Trip, GPS hoặc telemetry")
+    st.caption("YOLO11n + ByteTrack · cả hai cửa hỗ trợ IN và OUT · không cần Trip, GPS hoặc telemetry")
     job = st.session_state.get("ai_counting_job")
     running = bool(job and job["process"].poll() is None)
     inputs = {}
@@ -196,7 +209,7 @@ def render_counting_tab(root: Path) -> None:
             "track-ids": "Track ID và độ tin cậy",
             "zones": "Vùng đếm A/B",
             "trajectory": "Quỹ đạo",
-            "events": "Thông báo IN/OUT +1",
+            "events": "Thông báo IN/OUT +1 hoặc -1",
         }
         hidden = {
             key
