@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -34,10 +34,25 @@ class DetectorConfig:
 
 
 @dataclass(slots=True)
+class RearOccupancyConfig:
+    model: str = "11n-head.pt"
+    confidence: float = 0.35
+    iou: float = 0.5
+    imgsz: int = 640
+    device: str = "auto"
+    roi: list[tuple[float, float]] = field(
+        default_factory=lambda: [(0, 0), (1, 0), (1, 1), (0, 1)]
+    )
+    ignore: list[list[tuple[float, float]]] = field(default_factory=list)
+    smoothing_window: int = 1
+
+
+@dataclass(slots=True)
 class AppConfig:
     database_url: str
     detector: DetectorConfig
     cameras: dict[str, CameraConfig]
+    rear_occupancy: RearOccupancyConfig = field(default_factory=RearOccupancyConfig)
 
 
 def _polygon(value: list[list[float]]) -> list[tuple[float, float]]:
@@ -70,8 +85,29 @@ def load_config(path: str | Path = "configs/cameras.yaml") -> AppConfig:
             anchor_mode=value.get("anchor_mode", "bottom_center"),
             time_offset_ms=int(value.get("time_offset_ms", 0)),
         )
+    occupancy_raw = raw.get("rear_occupancy", {})
+    occupancy = RearOccupancyConfig(
+        model=str(occupancy_raw.get("model", "11n-head.pt")),
+        confidence=float(occupancy_raw.get("confidence", 0.35)),
+        iou=float(occupancy_raw.get("iou", 0.5)),
+        imgsz=int(occupancy_raw.get("imgsz", 640)),
+        device=str(occupancy_raw.get("device", "auto")),
+        roi=_polygon(occupancy_raw.get("roi", [[0, 0], [1, 0], [1, 1], [0, 1]])),
+        ignore=[_polygon(points) for points in occupancy_raw.get("ignore", [])],
+        smoothing_window=int(occupancy_raw.get("smoothing_window", 1)),
+    )
+    from .roi import validate_polygon
+
+    validate_polygon(occupancy.roi)
+    for polygon in occupancy.ignore:
+        validate_polygon(polygon)
+    if not 0 < occupancy.confidence <= 1 or not 0 < occupancy.iou <= 1:
+        raise ValueError("Head Detection confidence/IoU must be in (0, 1]")
+    if occupancy.imgsz < 32 or occupancy.smoothing_window < 1:
+        raise ValueError("Head Detection imgsz/window must be positive")
     return AppConfig(
         database_url=raw.get("database_url", "sqlite:///data/busstop_flow.db"),
         detector=DetectorConfig(**raw.get("detector", {})),
         cameras=cameras,
+        rear_occupancy=occupancy,
     )

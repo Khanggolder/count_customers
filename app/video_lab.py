@@ -94,6 +94,7 @@ def start_job(
     hidden_layers: set[str] | None = None,
     session_only: bool = False,
     start_frame: int = 0,
+    rear_mode: str = "door_out",
 ) -> subprocess.Popen:
     if not sources:
         raise ValueError("Chọn ít nhất một video FRONT hoặc REAR")
@@ -101,6 +102,10 @@ def start_job(
         raise ValueError("Phiên đếm độc lập không nhận Trip hoặc telemetry")
     if start_frame and not session_only:
         raise ValueError("Chọn frame bắt đầu chỉ hỗ trợ Test ROI độc lập")
+    if rear_mode not in {"door_out", "occupancy_headcount"}:
+        raise ValueError("REAR mode không hợp lệ")
+    if rear_mode != "door_out" and (not session_only or "rear" not in sources):
+        raise ValueError("Head Detection chỉ hỗ trợ REAR trong phiên đếm độc lập")
     output.mkdir(parents=True, exist_ok=True)
     config_snapshot = output / "cameras_snapshot.yaml"
     shutil.copy2(root / "configs" / "cameras.yaml", config_snapshot)
@@ -128,6 +133,8 @@ def start_job(
         command.extend(["--max-frames", str(max_frames)])
     if start_frame:
         command.extend(["--start-frame", str(start_frame)])
+    if rear_mode != "door_out":
+        command.extend(["--rear-mode", rear_mode])
     for layer in sorted(hidden_layers or set()):
         command.append(f"--hide-{layer}")
     log = (output / "process.log").open("w", encoding="utf-8")

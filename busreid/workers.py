@@ -8,6 +8,7 @@ from threading import Event, Lock
 
 from .config import AppConfig
 from .pipeline import CameraPipeline, OverlayOptions, PipelineCancelled, PipelineResult
+from .rear_occupancy import RearOccupancyPipeline, RearOccupancyResult
 
 
 @dataclass(slots=True)
@@ -18,7 +19,7 @@ class WorkerStatus:
 
 @dataclass(slots=True)
 class DualCameraResult:
-    results: dict[str, PipelineResult] = field(default_factory=dict)
+    results: dict[str, PipelineResult | RearOccupancyResult] = field(default_factory=dict)
     errors: dict[str, str] = field(default_factory=dict)
     cancelled: bool = False
 
@@ -46,7 +47,8 @@ class DualCameraRunner:
         cancel_file: Path | None,
         stop_file: Path | None,
         start_frame: int,
-    ) -> PipelineResult:
+        rear_mode: str,
+    ) -> PipelineResult | RearOccupancyResult:
         with self._lock:
             self.status[camera].state = "RUNNING"
         if self.cancel_event.is_set():
@@ -62,7 +64,12 @@ class DualCameraRunner:
             options["cancel_file"] = cancel_file
         if stop_file is not None:
             options["stop_file"] = stop_file
-        result = CameraPipeline(self.config.cameras[camera], self.config).run(source, output_dir, **options)
+        if camera == "rear" and rear_mode == "occupancy_headcount":
+            result = RearOccupancyPipeline(self.config.rear_occupancy).run(
+                source, output_dir, max_frames=max_frames, stop_file=stop_file, start_frame=start_frame
+            )
+        else:
+            result = CameraPipeline(self.config.cameras[camera], self.config).run(source, output_dir, **options)
         with self._lock:
             self.status[camera].state = result.status if hasattr(result, "status") else "COMPLETED"
         return result
@@ -77,7 +84,10 @@ class DualCameraRunner:
         cancel_file: Path | None = None,
         stop_file: Path | None = None,
         start_frame: int = 0,
+        rear_mode: str = "door_out",
     ) -> DualCameraResult:
+        if rear_mode not in {"door_out", "occupancy_headcount"}:
+            raise ValueError(f"Unknown REAR mode: {rear_mode}")
         valid = {
             camera: source for camera, source in sources.items() if source and camera in self.config.cameras
         }
@@ -99,6 +109,7 @@ class DualCameraRunner:
                     cancel_file,
                     stop_file,
                     start_frame,
+                    rear_mode,
                 ): camera
                 for camera, source in valid.items()
             }

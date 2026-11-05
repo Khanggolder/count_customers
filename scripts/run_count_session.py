@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 from busreid.config import load_config  # noqa: E402
 from busreid.pipeline import OverlayOptions  # noqa: E402
+from busreid.rear_occupancy import RearOccupancyResult  # noqa: E402
 from busreid.video import redact_source  # noqa: E402
 from busreid.workers import DualCameraRunner  # noqa: E402
 
@@ -32,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Independent FRONT-IN / REAR-OUT AI counting")
     parser.add_argument("--front")
     parser.add_argument("--rear")
+    parser.add_argument("--rear-mode", choices=("door_out", "occupancy_headcount"), default="door_out")
     parser.add_argument("--config", default="configs/cameras.yaml")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--max-frames", type=int)
@@ -63,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         start_frame=args.start_frame,
         overlay=overlay,
         stop_file=args.stop_file,
+        rear_mode=args.rear_mode,
     )
     status = (
         "FAILED"
@@ -76,12 +79,15 @@ def main(argv: list[str] | None = None) -> int:
         "status": status,
         "provenance": "REAL_VIDEO_AI",
         "association": "INDEPENDENT_SESSION_NO_TRIP",
+        "rear_mode": args.rear_mode if "rear" in sources else None,
         "sources": {camera: redact_source(source) for camera, source in sources.items()},
         "cameras": {
             camera: {
                 "status": result.status,
                 "frames": result.frames,
-                "count": len(result.events),
+                "mode": "OCCUPANCY_HEADCOUNT" if isinstance(result, RearOccupancyResult) else "DOOR_COUNT",
+                "count": None if isinstance(result, RearOccupancyResult) else len(result.events),
+                "visible_head_count": result.last_count if isinstance(result, RearOccupancyResult) else None,
                 "processing_fps": result.processing_fps,
             }
             for camera, result in outcome.results.items()

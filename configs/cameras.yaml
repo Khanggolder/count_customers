@@ -5,6 +5,17 @@ detector:
   iou: 0.50
   device: auto
   tracker: bytetrack.yaml
+# Experimental REAR cabin headcount only. This ROI is independent of door Zone A/B.
+# Full frame is a starting point; calibrate ROI/ignore on the actual cabin video.
+rear_occupancy:
+  model: 11n-head.pt
+  confidence: 0.35
+  iou: 0.50
+  imgsz: 640
+  device: auto
+  roi: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+  ignore: []
+  smoothing_window: 1
 cameras:
   front:
     role: front
