@@ -133,6 +133,12 @@ class HeadZoneCounter:
         state.last_seen = frame_index
         state.last_point = point
         state.trail.append((round(x), round(y)))
+        if not point_in_polygon(point, self.config.roi):
+            # Leaving the observation ROI is not a valid transition across the door.
+            state.stable = state.candidate = Zone.NONE
+            state.candidate_frames = 0
+            state.armed = state.transitioned = state.counted = False
+            return None
         zone = self._zone(point)
         if zone != state.candidate:
             state.candidate, state.candidate_frames = zone, 1

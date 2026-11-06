@@ -132,7 +132,7 @@ def load_config(path: str | Path = "configs/cameras.yaml") -> AppConfig:
         id_switch_grace_frames=int(head_raw.get("id_switch_grace_frames", 5)),
         id_switch_max_distance=float(head_raw.get("id_switch_max_distance", 0.08)),
     )
-    from .roi import validate_polygon, validate_zones
+    from .roi import validate_head_out_zones, validate_polygon
 
     validate_polygon(occupancy.roi)
     for polygon in occupancy.ignore:
@@ -141,8 +141,7 @@ def load_config(path: str | Path = "configs/cameras.yaml") -> AppConfig:
         raise ValueError("Head Detection confidence/IoU must be in (0, 1]")
     if occupancy.imgsz < 32 or occupancy.smoothing_window < 1:
         raise ValueError("Head Detection imgsz/window must be positive")
-    validate_polygon(head.roi)
-    validate_zones(head.zone_a, head.zone_b)
+    validate_head_out_zones(head.roi, head.zone_a, head.zone_b)
     if not 0 < head.confidence <= 1 or not 0 < head.iou <= 1 or head.imgsz < 32:
         raise ValueError("Head OUT confidence/IoU/imgsz invalid")
     if min(head.min_stable_frames, head.state_ttl_frames, head.id_switch_grace_frames) < 1:

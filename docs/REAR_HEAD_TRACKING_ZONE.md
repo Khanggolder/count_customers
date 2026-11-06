@@ -6,11 +6,22 @@ Chế độ `head_tracking_zone_out` đếm **lượt đầu đi qua cửa sau t
 
 Checkpoint mặc định là `11n-head.pt` của [wesjos/YOLO-head-detection](https://huggingface.co/wesjos/YOLO-head-detection), một class head, license AGPL-3.0. Lần đầu chạy, worker tải checkpoint vào `runs/models/` (Git bỏ qua); có thể đặt file `.pt` tin cậy ở máy và cấu hình `rear_head_out.model`. Model được nạp một lần cho mỗi worker, không nạp mỗi frame. Ultralytics `model.track(..., persist=True, classes=[0])` dùng ByteTrack mặc định hoặc BoT-SORT qua `rear_head_out.tracker`. `device: auto` có thể dùng CUDA khi môi trường hỗ trợ; `device: cpu` dùng CPU. Confidence, IoU và `imgsz` chỉnh trong `configs/cameras.yaml`.
 
-Mỗi Track ID dùng **tâm bounding box đầu người** làm anchor. Bộ đếm yêu cầu: ổn định trong A ít nhất `min_stable_frames`, ổn định trong vùng chuyển tiếp ngoài A/B, rồi ổn định trong B. Một lần như vậy tạo đúng một event OUT. Đứng yên, A → A, B → A, nhảy thẳng A → B không có vùng chuyển tiếp xác nhận, hoặc mất track trước B đều không tạo event. Mỗi track có trạng thái riêng; track cũ bị xóa sau `state_ttl_frames`. ID mới chỉ thừa kế trạng thái cũ khi trong `id_switch_grace_frames` có **đúng một** track gần hơn `id_switch_max_distance` theo tọa độ normalized. Khi có nhiều ứng viên, track mới bị chặn đếm để tránh tự suy diễn danh tính. Điều này ưu tiên hạn chế đếm sai nhưng có thể bỏ sót khi đông người, che khuất hoặc ID switch.
+Mỗi Track ID dùng **tâm bounding box đầu người** làm anchor. Bộ đếm yêu cầu: ổn định trong A ít nhất `min_stable_frames`, ổn định trong vùng chuyển tiếp **bên trong ROI** và ngoài A/B, rồi ổn định trong B. Một lần như vậy tạo đúng một event OUT. Ra khỏi ROI sẽ hủy crossing đang chờ. Đứng yên, A → A, B → A, nhảy thẳng A → B không có vùng chuyển tiếp xác nhận, hoặc mất track trước B đều không tạo event. Mỗi track có trạng thái riêng; track cũ bị xóa sau `state_ttl_frames`. ID mới chỉ thừa kế trạng thái cũ khi trong `id_switch_grace_frames` có **đúng một** track gần hơn `id_switch_max_distance` theo tọa độ normalized. Khi có nhiều ứng viên, track mới bị chặn đếm để tránh tự suy diễn danh tính. Điều này ưu tiên hạn chế đếm sai nhưng có thể bỏ sót khi đông người, che khuất hoặc ID switch.
 
-## Hiệu chỉnh ROI và Zone
+## Hiệu chỉnh ROI và Zone bằng chuột
 
-Sửa riêng khối `rear_head_out` trong `configs/cameras.yaml`:
+1. Chạy Streamlit theo lệnh bên dưới và mở tab **Thiết lập vùng đếm (ROI)**.
+2. Trong **Camera**, chọn **REAR – Head Tracking + Zone OUT**. Chọn video trong `data/raw`, upload MP4, nhập đường dẫn MP4 hoặc lấy một frame webcam/RTSP được cấp phép. Với MP4, kéo slider đến frame thấy rõ đầu, cửa và hướng di chuyển.
+3. Chọn **ROI – vùng quan sát**, **Zone A** hoặc **Zone B**. Chỉ vùng đang chọn nhận thao tác; cả ba vùng luôn được vẽ cùng lúc: ROI xanh lá, A vàng, B xanh dương, mũi tên A → B trắng. Click để thêm đỉnh; chọn **Dời đỉnh** rồi kéo đỉnh hoặc chọn đỉnh và click vị trí mới. Có nút **Xóa đỉnh đã chọn**, **Hoàn tác**, **Xóa vùng**, **Nạp lại cấu hình**. Bảng dưới ảnh hiển thị tọa độ pixel và normalized của từng đỉnh.
+4. Vẽ A ở phía trong xe, B ở phía ngoài/hướng xuống xe. Để một khoảng trống giữa hai vùng cho đầu được xác nhận tại **Transition**. Cả A và B phải nằm hoàn toàn trong ROI. Nút **Lưu ROI** chỉ khả dụng khi ba polygon hợp lệ, không tự cắt, không chồng lấn và A/B không chạm nhau. Khi lưu, chỉ `rear_head_out.roi`, `rear_head_out.zone_a`, `rear_head_out.zone_b` được cập nhật; FRONT, REAR Person, occupancy, model/tracker và các trường YAML khác được giữ. Bản sao lưu riêng là `configs/cameras.yaml.rear_head_out.bak`; nút **Khôi phục ROI Head Tracking từ bản sao lưu** chỉ phục hồi ba vùng này.
+5. Chọn số frame rồi bấm **Test Head Tracking ROI**. Với MP4 có thể bắt đầu ngay từ frame đang hiển thị hoặc nhập frame khác. Webcam/RTSP bắt đầu ở frame hiện tại của luồng và chạy đến giới hạn frame hoặc khi nguồn kết thúc. Test dùng checkpoint head + ByteTrack thật, hiển thị preview/video annotated, `Head-OUT`, số detection/track theo frame, số xác nhận A/Transition/B, FPS và tải CSV. Nếu có bản nháp chưa lưu, nút Test bị khóa và hiện cảnh báo; nhấn **Lưu ROI** trước.
+6. Quay lại tab **Đếm khách AI**, chọn chế độ REAR Head Tracking và chạy inference mới. Phiên mới đọc ba vùng đã lưu; mỗi worker giữ snapshot YAML tại lúc khởi chạy. Bản nháp của FRONT Person, REAR Person và REAR Head được giữ riêng khi đổi lựa chọn.
+
+Test ROI và Head-OUT là output AI, **không phải ground truth**. Nếu video không có crossing hợp lệ, kết quả 0 vẫn có thể đúng với vùng đã vẽ; xem video và các số xác nhận để hiệu chỉnh.
+
+### Tùy chọn cấu hình bằng YAML
+
+Giao diện phía trên không yêu cầu sửa YAML. Nếu cần tự động hóa, có thể sửa riêng khối `rear_head_out` trong `configs/cameras.yaml`:
 
 ```yaml
 rear_head_out:
@@ -19,9 +30,7 @@ rear_head_out:
   zone_b: [[0.70, 0.20], [0.90, 0.20], [0.90, 0.80], [0.70, 0.80]]
 ```
 
-Các số trong ví dụ chỉ minh họa cú pháp, **không phải** vị trí mặc định phù hợp cho mọi camera. Tọa độ normalized bằng `x_pixel / chiều_rộng`, `y_pixel / chiều_cao`. Mặc định trong YAML lấy zone cửa REAR hiện có làm điểm bắt đầu, nhưng zone này trước đây được hiệu chỉnh cho chân người, nên cần kiểm tra lại **tâm đầu** trên video thực. A phải nằm phía trong xe, B phía ngoài hoặc phía hành khách đang đi xuống. Để có vùng chuyển tiếp, A và B cần cách nhau đủ xa cho ít nhất `min_stable_frames` trong mỗi vùng. Polygon phải hợp lệ, không tự cắt/chồng lấn, nằm trong `[0,1]`.
-
-Tab **Thiết lập vùng đếm (ROI)** hiện chỉ sửa zone của pipeline person FRONT/REAR; nó chưa sửa khối `rear_head_out`. Với thử nghiệm này, chỉnh YAML và chạy video ngắn để xem ROI/A/B trực tiếp trên video annotated. Mỗi phiên dashboard chụp snapshot YAML lúc bắt đầu nên không đổi ROI của worker đang chạy. Overlay có thể bật/tắt box, Track ID, quỹ đạo, zone và thông báo OUT trong phần tùy chọn của tab **Đếm khách AI**.
+Các số trong ví dụ chỉ minh họa cú pháp, **không phải** vị trí mặc định phù hợp cho mọi camera. Tọa độ normalized bằng `x_pixel / chiều_rộng`, `y_pixel / chiều_cao`. Mặc định lấy zone cửa REAR Person hiện có làm điểm bắt đầu, nhưng zone này trước đây được hiệu chỉnh cho chân người, nên cần kiểm tra lại **tâm đầu** trên video thực. Overlay box, Track ID, quỹ đạo, zone và thông báo OUT có thể bật/tắt trong tab **Đếm khách AI**.
 
 ## Chạy trên Windows
 
@@ -46,6 +55,8 @@ Có thể thêm `--front "C:\path\to\front.mp4"`. Bỏ `--rear-mode` để dùng
 Trong thư mục output có `rear_head_out_events.csv`, `rear_head_out_annotated.mp4`, `rear_head_out_summary.json`, `rear_head_out_progress.json`, `rear_head_out_preview.jpg` và `session_summary.json`. CSV có camera, Track ID, OUT, frame index, timestamp nguồn, confidence, `crossing_zone`, tọa độ anchor và thời gian UTC nếu là RTSP. Summary có số frame, FPS xử lý, model/tracker/device, status, snapshot cấu hình và số event. `diagnostics` tách tổng detection, tổng box có Track ID và số lần xác nhận A/vùng chuyển tiếp/B; mỗi tổng là lượt quan sát theo frame, **không phải số hành khách**. Ví dụ detection > 0 nhưng stable A = 0 thường gợi ý vùng chưa trúng tâm đầu. Nếu detection = 0 cần xem model, ngưỡng và góc quay; nếu detection > tracked, xem tracker/che khuất; nếu đã qua A và transition nhưng không ra event, xem B và điều kiện ổn định.
 
 Smoke test cuối 40 frame trên hai video cửa local (không đưa video vào Git) chạy FRONT và REAR đồng thời: REAR dùng `cuda:0`, 6.86 FPS xử lý, 40 detection và 40 box có ID, nhưng không có xác nhận A hay event; FRONT 9.15 FPS, 0 event. FPS thay đổi theo tải máy; lần chạy trước trên cùng 40 frame cho 8.28 và 11.81 FPS. Đây là kiểm tra đường chạy bằng model thật trên một đoạn ngắn, **không đo accuracy**. Video góc cửa không có nhãn người đi qua cùng ID; phải gán nhãn thủ công các crossing và kiểm tra toàn clip trước khi kết luận precision/recall. ID switch, người chen nhau, đầu quá nhỏ hoặc bị che khuất vẫn có thể gây bỏ sót hay đếm sai. Unit/integration test dùng FakeTracker để kiểm tra phần mềm, không chứng minh độ chính xác AI.
+
+Sau khi thêm trình chỉnh vùng, smoke test lại 40 frame REAR với cấu hình vùng mặc định chưa hiệu chỉnh: `cuda:0`, 4.53 FPS, 40 detection, 40 box có ID, 0 xác nhận A và 0 OUT. FPS giảm trong lần chạy này do tải máy khác; đây không phải benchmark. Hãy vẽ lại A/B bằng giao diện trên frame có đầu người đi qua cửa rồi dùng **Test Head Tracking ROI** để xem sự kiện trên chính video của bạn.
 
 Kiểm thử:
 

@@ -120,7 +120,7 @@ Kết quả ở `runs/ai_counting/<session-id>/`: `front/rear_preview.jpg`, `fro
 
 Nhánh thử nghiệm có thêm lựa chọn **Thử nghiệm đếm khách trong xe (Head Detection)** riêng cho REAR. Mode này dùng checkpoint `11n-head.pt` để hiển thị số đầu nhìn thấy **theo frame**, CSV occupancy và video có box; **không** tạo REAR-OUT hay cộng vào tổng lượt IN/OUT. Mặc định REAR vẫn đếm qua cửa như trước, FRONT không thay đổi. Xem cách tải model, hiệu chỉnh ROI khoang xe và chạy CLI tại [REAR_OCCUPANCY_EXPERIMENT.md](docs/REAR_OCCUPANCY_EXPERIMENT.md).
 
-Nhánh thử nghiệm này còn có **Thử nghiệm Head Tracking + Zone OUT** cho REAR: checkpoint head + ByteTrack, chỉ xuất một lượt OUT sau khi tâm đầu ổn định tại A → vùng chuyển tiếp → B. Event, video, progress và summary được xuất riêng; không ghi Trip/SQLite và không cộng vào tổng nghiệp vụ. Cấu hình ROI/A/B normalized của mode này ở `rear_head_out` trong YAML và được vẽ trên video; tab ROI hiện chỉnh vùng person, chưa chỉnh vùng head. Xem [REAR_HEAD_TRACKING_ZONE.md](docs/REAR_HEAD_TRACKING_ZONE.md).
+Nhánh thử nghiệm này còn có **Thử nghiệm Head Tracking + Zone OUT** cho REAR: checkpoint head + ByteTrack, chỉ xuất một lượt OUT sau khi tâm đầu ổn định tại A → vùng chuyển tiếp → B. Event, video, progress và summary được xuất riêng; không ghi Trip/SQLite và không cộng vào tổng nghiệp vụ. Trong tab **Thiết lập vùng đếm (ROI)**, chọn **REAR – Head Tracking + Zone OUT** để vẽ và lưu riêng ROI/A/B, rồi bấm **Test Head Tracking ROI** trên một đoạn video. Xem [REAR_HEAD_TRACKING_ZONE.md](docs/REAR_HEAD_TRACKING_ZONE.md).
 
 Tab **Hai cửa** vẫn giữ luồng cũ cho AI Video Lab và Trip đã xác minh, nhưng mặc định bị ẩn; bật `BUSSTOP_SHOW_ADVANCED_TABS=1` như trên để sử dụng:
 

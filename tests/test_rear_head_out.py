@@ -87,6 +87,12 @@ def test_boundary_oscillation_and_reentry_do_not_duplicate() -> None:
     assert counter.total_out == len(events) == 1
 
 
+def test_leaving_roi_cannot_serve_as_confirmed_transition() -> None:
+    roi = [(0, 0), (.9, 0), (.9, 1), (0, 1)]
+    counter, events = run_tracks(path_for("head1", [.2, .2, .95, .95, .8, .8]), roi=roi)
+    assert counter.total_out == 0 and not events
+
+
 def test_two_heads_count_independently() -> None:
     frames = [[("one", x), ("two", x)] for x in [.2, .2, .5, .5, .8, .8]]
     counter, events = run_tracks(frames)

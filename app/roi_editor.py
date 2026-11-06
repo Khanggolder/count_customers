@@ -1,8 +1,9 @@
-"""Streamlit polygon editor for FRONT/REAR counting zones."""
+"""Streamlit polygon editor for person and experimental head crossing zones."""
 
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 
 import cv2
@@ -13,10 +14,26 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 
 from busreid.config import CameraConfig, load_config
 from busreid.pipeline import OverlayOptions, annotate_frame
-from busreid.roi import restore_backup, save_zones, to_normalized, to_pixels, validate_polygon, validate_zones
+from busreid.roi import (
+    restore_backup,
+    restore_head_out_backup,
+    save_head_out_zones,
+    save_zones,
+    to_normalized,
+    to_pixels,
+    validate_head_out_zones,
+    validate_polygon,
+    validate_zones,
+)
 from busreid.video import OpenCVVideoSource
 
+from .counting_tab import _show_preview, _show_video
 from .video_lab import camera_status, new_job_dir, save_upload, start_job
+
+_HEAD_TARGET = "rear_head_out"
+_LABELS = {"front": "FRONT – Person Detection", "rear": "REAR – Person Detection",
+           _HEAD_TARGET: "REAR – Head Tracking + Zone OUT"}
+_COLORS = {"roi": (180, 255, 180), "a": (0, 200, 255), "b": (255, 180, 0)}
 
 
 def read_video_frame(path: str | int, frame_index: int = 0) -> tuple[np.ndarray, int, float]:
@@ -54,7 +71,8 @@ def read_video_frame(path: str | int, frame_index: int = 0) -> tuple[np.ndarray,
 
 
 def _display_frame(
-    frame: np.ndarray, camera: CameraConfig, zones: dict[str, list[tuple[float, float]]]
+    frame: np.ndarray, camera: CameraConfig, zones: dict[str, list[tuple[float, float]]],
+    *, head_mode: bool = False,
 ) -> Image.Image:
     height, width = frame.shape[:2]
     scale = min(1.0, 800 / width)
@@ -63,7 +81,9 @@ def _display_frame(
     height, width = frame.shape[:2]
     shaded = frame.copy()
     complete = {}
-    for label, color in (("a", (0, 200, 255)), ("b", (255, 180, 0))):
+    labels = ("roi", "a", "b") if head_mode else ("a", "b")
+    for label in labels:
+        color = _COLORS[label]
         points = zones[label]
         try:
             validate_polygon(points)
@@ -74,17 +94,29 @@ def _display_frame(
             contour = np.asarray([to_pixels(p, width, height) for p in points], dtype=np.int32)
             cv2.fillPoly(shaded, [contour], color)
     frame = cv2.addWeighted(shaded, 0.2, frame, 0.8, 0)
-    preview_camera = copy.copy(camera)
-    preview_camera.zone_a = zones["a"] if complete["a"] else []
-    preview_camera.zone_b = zones["b"] if complete["b"] else []
-    frame = annotate_frame(
-        frame,
-        [],
-        preview_camera,
-        {"IN": 0, "OUT": 0},
-        options=OverlayOptions(boxes=False, track_ids=False, trajectory=False, events=False),
-    )
-    for label, color in (("a", (0, 200, 255)), ("b", (255, 180, 0))):
+    if head_mode:
+        for label in labels:
+            if complete[label]:
+                contour = np.asarray([to_pixels(p, width, height) for p in zones[label]], dtype=np.int32)
+                cv2.polylines(frame, [contour], True, _COLORS[label], 2)
+                center = np.mean(contour, axis=0).astype(int)
+                cv2.putText(frame, "ROI" if label == "roi" else f"ZONE {label.upper()}",
+                            tuple(center), cv2.FONT_HERSHEY_SIMPLEX, 0.5, _COLORS[label], 2)
+        cv2.putText(frame, "HEAD OUT: A -> TRANSITION -> B", (8, max(20, height - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+    else:
+        preview_camera = copy.copy(camera)
+        preview_camera.zone_a = zones["a"] if complete["a"] else []
+        preview_camera.zone_b = zones["b"] if complete["b"] else []
+        frame = annotate_frame(
+            frame,
+            [],
+            preview_camera,
+            {"IN": 0, "OUT": 0},
+            options=OverlayOptions(boxes=False, track_ids=False, trajectory=False, events=False),
+        )
+    for label in labels:
+        color = _COLORS[label]
         points = zones[label]
         contour = np.asarray([to_pixels(p, width, height) for p in points], dtype=np.int32)
         if len(contour) >= 2 and not complete[label]:
@@ -103,9 +135,8 @@ def _display_frame(
 def _editor_state(camera: str, config_path: Path) -> dict:
     key = f"roi_editor_{camera}"
     if key not in st.session_state:
-        configured = load_config(config_path).cameras[camera]
         st.session_state[key] = {
-            "zones": {"a": list(configured.zone_a), "b": list(configured.zone_b)},
+            "zones": _configured_zones(camera, config_path),
             "history": [],
             "revision": 0,
             "saved_revision": 0,
@@ -113,6 +144,22 @@ def _editor_state(camera: str, config_path: Path) -> dict:
             "upload_identity": None,
         }
     return st.session_state[key]
+
+
+def _configured_zones(target: str, config_path: Path) -> dict[str, list[tuple[float, float]]]:
+    config = load_config(config_path)
+    configured = config.rear_head_out if target == _HEAD_TARGET else config.cameras[target]
+    zones = {"a": list(configured.zone_a), "b": list(configured.zone_b)}
+    if target == _HEAD_TARGET:
+        zones = {"roi": list(configured.roi), **zones}
+    return zones
+
+
+def _validate_editor_zones(target: str, zones: dict[str, list[tuple[float, float]]]) -> None:
+    if target == _HEAD_TARGET:
+        validate_head_out_zones(zones["roi"], zones["a"], zones["b"])
+    else:
+        validate_zones(zones["a"], zones["b"])
 
 
 def _mutate(state: dict, zones: dict[str, list[tuple[float, float]]]) -> None:
@@ -210,13 +257,16 @@ def _apply_click(
 
 def render_roi_editor(root: Path) -> None:
     st.subheader("Thiết lập vùng đếm (ROI)")
-    st.caption("FRONT: A → B = IN · REAR: A → B = OUT. Đây là vùng đếm, không phải nhãn ground truth.")
+    st.caption("FRONT Person: A → B = IN · REAR Person: A → B = OUT · REAR Head: A → Transition → B = OUT.")
     config_path = root / "configs" / "cameras.yaml"
-    camera = st.selectbox("Camera", ["front", "rear"], format_func=str.upper)
-    state = _editor_state(camera, config_path)
+    target = st.selectbox("Camera", ["front", "rear", _HEAD_TARGET],
+                          format_func=lambda value: _LABELS[value])
+    camera = "rear" if target == _HEAD_TARGET else target
+    head_mode = target == _HEAD_TARGET
+    state = _editor_state(target, config_path)
     if state["revision"] != state["saved_revision"]:
-        st.warning(f"{camera.upper()} có chỉnh sửa ROI chưa lưu; chuyển camera không xóa bản nháp này.")
-    source, is_mp4 = _select_source(root, camera, state)
+        st.warning(f"{_LABELS[target]} có chỉnh sửa ROI chưa lưu; chuyển chế độ không xóa bản nháp này.")
+    source, is_mp4 = _select_source(root, target, state)
     frame = None
     frame_index = 0
     frame_count = 0
@@ -225,8 +275,8 @@ def render_roi_editor(root: Path) -> None:
             _, frame_count, fps = read_video_frame(source)
             if source != state.get("display_source"):
                 state["display_source"] = source
-                st.session_state.pop(f"roi_frame_{camera}", None)
-            frame_index = st.slider("Frame MP4", 0, max(0, frame_count - 1), 0, key=f"roi_frame_{camera}")
+                st.session_state.pop(f"roi_frame_{target}", None)
+            frame_index = st.slider("Frame MP4", 0, max(0, frame_count - 1), 0, key=f"roi_frame_{target}")
             frame = read_video_frame(source, frame_index)[0]
             st.caption(f"Frame {frame_index + 1}/{frame_count or '?'} · {fps:.2f} FPS")
         except (ValueError, OSError, RuntimeError, cv2.error):
@@ -237,7 +287,9 @@ def render_roi_editor(root: Path) -> None:
         st.info("Chọn MP4 hoặc lấy frame camera để bắt đầu vẽ ROI.")
         return
     zone = st.radio(
-        "Vùng chỉnh sửa", ["a", "b"], format_func=lambda value: f"Zone {value.upper()}", horizontal=True
+        "Vùng chỉnh sửa", ["roi", "a", "b"] if head_mode else ["a", "b"],
+        format_func=lambda value: "ROI – vùng quan sát" if value == "roi" else f"Zone {value.upper()}",
+        horizontal=True,
     )
     action = st.radio("Thao tác trên ảnh", ["Thêm đỉnh", "Dời đỉnh"], horizontal=True)
     points = state["zones"][zone]
@@ -246,11 +298,12 @@ def render_roi_editor(root: Path) -> None:
         vertex = st.selectbox(
             "Đỉnh đang chọn", list(range(len(points))), format_func=lambda i: f"{zone.upper()}{i + 1}"
         )
-    picture = _display_frame(frame, load_config(config_path).cameras[camera], state["zones"])
+    picture = _display_frame(frame, load_config(config_path).cameras[camera], state["zones"],
+                             head_mode=head_mode)
     st.caption("Click để thêm đỉnh; ở chế độ dời, kéo từ đỉnh sang vị trí mới hoặc chọn đỉnh rồi click đích.")
     click = streamlit_image_coordinates(
         picture,
-        key=f"roi_canvas_{camera}_{frame_index}_{state['revision']}_{zone}_{action}",
+        key=f"roi_canvas_{target}_{frame_index}_{state['revision']}_{zone}_{action}",
         click_and_drag=action == "Dời đỉnh",
         cursor="crosshair",
     )
@@ -273,11 +326,10 @@ def render_roi_editor(root: Path) -> None:
         _mutate(state, zones)
         st.rerun()
     if buttons[3].button("Nạp lại cấu hình"):
-        configured = load_config(config_path).cameras[camera]
-        _mutate(state, {"a": list(configured.zone_a), "b": list(configured.zone_b)})
+        _mutate(state, _configured_zones(target, config_path))
         st.rerun()
     height, width = frame.shape[:2]
-    for label in ("a", "b"):
+    for label in (("roi", "a", "b") if head_mode else ("a", "b")):
         rows = [
             {
                 "đỉnh": i + 1,
@@ -286,38 +338,47 @@ def render_roi_editor(root: Path) -> None:
             }
             for i, point in enumerate(state["zones"][label])
         ]
-        st.write(f"Zone {label.upper()}")
+        st.write("ROI – vùng quan sát" if label == "roi" else f"Zone {label.upper()}")
         st.dataframe(rows, hide_index=True, use_container_width=True)
     try:
-        validate_zones(state["zones"]["a"], state["zones"]["b"])
+        _validate_editor_zones(target, state["zones"])
         valid = True
-        st.success("Hai polygon hợp lệ, không tự cắt và không chồng lấn.")
+        st.success("Các polygon hợp lệ, nằm đúng ROI và có vùng chuyển tiếp." if head_mode
+                   else "Hai polygon hợp lệ, không tự cắt và không chồng lấn.")
     except ValueError as exc:
         valid = False
         st.warning(f"Chưa thể lưu: {exc}")
     left, right = st.columns(2)
     if left.button("Lưu ROI", type="primary", disabled=not valid):
         try:
-            backup = save_zones(config_path, camera, state["zones"]["a"], state["zones"]["b"])
+            backup = (
+                save_head_out_zones(config_path, state["zones"]["roi"],
+                                    state["zones"]["a"], state["zones"]["b"])
+                if head_mode else save_zones(config_path, camera, state["zones"]["a"], state["zones"]["b"])
+            )
             state["saved_revision"] = state["revision"]
             st.success(f"Đã lưu. Bản sao lưu: {backup.name}. Phiên inference mới sẽ dùng ROI này.")
         except (OSError, ValueError) as exc:
             st.error(f"Không lưu được ROI: {exc}")
-    if right.button("Khôi phục ROI camera này từ bản sao lưu"):
+    if right.button("Khôi phục ROI Head Tracking từ bản sao lưu" if head_mode
+                    else "Khôi phục ROI camera này từ bản sao lưu"):
         try:
-            restore_backup(config_path, camera)
-            configured = load_config(config_path).cameras[camera]
-            _mutate(state, {"a": list(configured.zone_a), "b": list(configured.zone_b)})
+            if head_mode:
+                restore_head_out_backup(config_path)
+            else:
+                restore_backup(config_path, camera)
+            _mutate(state, _configured_zones(target, config_path))
             state["saved_revision"] = state["revision"]
             st.rerun()
         except (FileNotFoundError, ValueError, OSError) as exc:
             st.error(str(exc))
-    st.markdown("#### Test ROI trên đoạn MP4")
-    st.caption(
-        "Chạy YOLO11n + ByteTrack thật trên đoạn video đã chọn; event là output AI, không phải ground truth."
-    )
+    st.markdown("#### Test Head Tracking ROI" if head_mode else "#### Test ROI trên đoạn MP4")
+    st.caption("Chạy 11n-head.pt + ByteTrack + HeadZoneCounter trên nguồn đã chọn; "
+               "Head-OUT là output AI, không phải ground truth." if head_mode else
+               "Chạy YOLO11n + ByteTrack thật trên đoạn video đã chọn; "
+               "event là output AI, không phải ground truth.")
     if state["revision"] != state["saved_revision"]:
-        st.info("Lưu ROI trước khi Test ROI để worker dùng đúng vùng đang hiển thị.")
+        st.warning("Bản nháp chưa lưu. Hãy Lưu ROI trước khi Test để worker dùng đúng vùng đang hiển thị.")
     use_current = st.checkbox("Bắt đầu tại frame đang hiển thị", value=True, disabled=not is_mp4)
     start_frame = frame_index if use_current else st.number_input(
         "Frame bắt đầu (0-based)", min_value=0, max_value=max(0, frame_count - 1), value=0
@@ -325,32 +386,76 @@ def render_roi_editor(root: Path) -> None:
     limit = st.number_input("Số frame kiểm thử", min_value=1, max_value=600, value=90)
     if is_mp4 and frame_count:
         st.caption(f"Sẽ xử lý frame {start_frame}–{min(frame_count - 1, start_frame + int(limit) - 1)}.")
-    current_job = st.session_state.get("roi_test_job")
+    job_key = f"roi_test_job_{target}"
+    current_job = st.session_state.get(job_key)
     busy = bool(current_job and current_job["process"].poll() is None)
     if st.button(
-        "Test ROI",
-        disabled=busy or not (valid and is_mp4 and source and state["revision"] == state["saved_revision"]),
+        "Test Head Tracking ROI" if head_mode else "Test ROI",
+        disabled=busy or not (valid and frame is not None and source is not None
+                              and state["revision"] == state["saved_revision"]),
     ):
         output = new_job_dir(root, kind="ai_counting")
-        process = start_job(
-            root, output, {camera: source}, max_frames=int(limit), start_frame=int(start_frame), session_only=True
-        )
-        st.session_state["roi_test_job"] = {"process": process, "output": output, "camera": camera}
-        st.rerun()
-    job = st.session_state.get("roi_test_job")
+        try:
+            process = start_job(
+                root, output, {camera: f"webcam:{source}" if isinstance(source, int) else source},
+                max_frames=int(limit), start_frame=int(start_frame) if is_mp4 else 0,
+                session_only=True, rear_mode="head_tracking_zone_out" if head_mode else "door_out",
+            )
+        except (OSError, ValueError) as exc:
+            st.error(f"Không bắt đầu được Test ROI: {exc}")
+        else:
+            st.session_state[job_key] = {
+                "process": process, "output": output, "camera": camera, "head_mode": head_mode,
+            }
+            st.rerun()
+    job = st.session_state.get(job_key)
     if job:
-        progress = camera_status(job["output"], job["camera"], job["process"].poll())
-        st.write(
-            f"{job['camera'].upper()}: {progress['status']} · {progress['frames']} frame · {progress['events']} event"
-        )
-        preview = job["output"] / f"{job['camera']}_preview.jpg"
+        if head_mode:
+            progress_path = job["output"] / "rear_head_out_progress.json"
+            try:
+                progress = json.loads(progress_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                progress = {"status": "QUEUED" if job["process"].poll() is None else "FAILED", "frames": 0}
+            st.write(f"REAR Head Tracking: {progress['status']} · {progress.get('frames', 0)} frame")
+            columns = st.columns(4)
+            for column, (label, field) in zip(columns, (
+                ("Head-OUT", "count"), ("Detection", "detected_heads"),
+                ("Track", "tracked_heads"), ("FPS xử lý", "processing_fps"),
+            ), strict=True):
+                value = progress.get(field)
+                column.metric(label, round(value, 2) if field == "processing_fps" and value is not None
+                              else value if value is not None else "N/A")
+            st.caption(
+                f"Xác nhận A: {progress.get('stable_a_confirmations', 'N/A')} · "
+                f"Transition: {progress.get('transition_confirmations', 'N/A')} · "
+                f"B: {progress.get('stable_b_confirmations', 'N/A')}"
+            )
+            st.caption("Detection và Track là tổng box quan sát qua các frame, không phải số người duy nhất.")
+            total_frames = progress.get("total_frames")
+            if total_frames and progress["status"] == "RUNNING":
+                st.progress(min(progress.get("frames", 0) / total_frames, 1.0))
+            stem = "rear_head_out"
+            events = job["output"] / "rear_head_out_events.csv"
+        else:
+            progress = camera_status(job["output"], job["camera"], job["process"].poll())
+            st.write(
+                f"{job['camera'].upper()}: {progress['status']} · {progress['frames']} frame · "
+                f"{progress['events']} event"
+            )
+            stem = job["camera"]
+            events = job["output"] / f"{stem}_events.csv"
+        if progress.get("error"):
+            st.error(str(progress["error"]))
+        preview = job["output"] / f"{stem}_preview.jpg"
         if preview.is_file():
-            st.image(str(preview), caption="Preview inference thật")
-        events = job["output"] / f"{job['camera']}_events.csv"
+            _show_preview(preview, "Preview inference thật")
         if events.is_file():
-            st.download_button("Tải crossing CSV", events.read_bytes(), events.name, "text/csv")
-        video = job["output"] / f"{job['camera']}_annotated.mp4"
+            try:
+                st.download_button("Tải crossing CSV", events.read_bytes(), events.name, "text/csv")
+            except OSError:
+                st.caption("CSV đang được ghi; thử lại sau.")
+        video = job["output"] / f"{stem}_annotated.mp4"
         if video.is_file():
-            st.video(str(video))
+            _show_video(video)
         if job["process"].poll() is None:
             st.button("Cập nhật tiến độ")

@@ -104,6 +104,15 @@ def _show_preview(path: Path, caption: str) -> bool:
     return True
 
 
+def _show_video(path: Path) -> bool:
+    try:
+        st.video(str(path), format="video/mp4")
+    except OSError:
+        st.caption("Video đang bị khóa tạm thời; vui lòng thử lại sau.")
+        return False
+    return True
+
+
 def _camera_view(job: dict | None, camera: str) -> dict | None:
     title, direction, counter_label = _DIRECTIONS[camera]
     head_mode = camera == "rear" and bool(job and job.get("rear_mode") == "occupancy_headcount")
@@ -129,7 +138,7 @@ def _camera_view(job: dict | None, camera: str) -> dict | None:
             annotated = output / "rear_annotated.mp4"
             preview = output / "rear_preview.jpg"
             if state in {"COMPLETED", "STOPPED"} and annotated.is_file():
-                st.video(str(annotated), format="video/mp4")
+                _show_video(annotated)
             elif preview.is_file() and state == "RUNNING":
                 _show_preview(preview, "Frame Head Detection mới nhất")
             if progress.get("error"):
@@ -153,7 +162,7 @@ def _camera_view(job: dict | None, camera: str) -> dict | None:
             annotated = output / "rear_head_out_annotated.mp4"
             preview = output / "rear_head_out_preview.jpg"
             if state in {"COMPLETED", "STOPPED"} and annotated.is_file():
-                st.video(str(annotated), format="video/mp4")
+                _show_video(annotated)
             elif state == "RUNNING" and preview.is_file():
                 _show_preview(preview, "Frame Head Tracking mới nhất")
             if progress.get("error"):
@@ -185,8 +194,8 @@ def _camera_view(job: dict | None, camera: str) -> dict | None:
         preview = output / f"{camera}_preview.jpg"
         annotated = output / f"{camera}_annotated.mp4"
         if state in {"COMPLETED", "STOPPED"} and annotated.is_file():
-            st.video(str(annotated), format="video/mp4")
-            st.caption("Video phát lại đã chú thích · H.264")
+            if _show_video(annotated):
+                st.caption("Video phát lại đã chú thích · H.264")
         elif preview.is_file():
             _show_preview(preview, "Frame AI đã xử lý · cập nhật theo chu kỳ")
         elif state == "FAILED":
