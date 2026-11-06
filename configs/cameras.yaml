@@ -16,6 +16,23 @@ rear_occupancy:
   roi: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
   ignore: []
   smoothing_window: 1
+# Experimental REAR head tracking. A = inside; B = outside/downstream.
+# Calibrate on a rear-door video: the zones below are only a starting point.
+# This mode never persists PassengerEvent or changes the door_out configuration.
+rear_head_out:
+  model: 11n-head.pt
+  tracker: bytetrack.yaml
+  confidence: 0.35
+  iou: 0.50
+  imgsz: 640
+  device: auto
+  roi: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+  zone_a: [[0.575, 0.12666666666666668], [0.57, 0.38222222222222224], [0.53625, 0.3711111111111111], [0.54625, 0.14444444444444443]]
+  zone_b: [[0.58625, 0.13555555555555557], [0.66, 0.14444444444444443], [0.645, 0.3844444444444444], [0.585, 0.37777777777777777]]
+  min_stable_frames: 2
+  state_ttl_frames: 90
+  id_switch_grace_frames: 5
+  id_switch_max_distance: 0.08
 cameras:
   front:
     role: front

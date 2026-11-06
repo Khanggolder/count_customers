@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 from busreid.config import load_config  # noqa: E402
 from busreid.pipeline import OverlayOptions  # noqa: E402
+from busreid.rear_head_out import RearHeadOutResult  # noqa: E402
 from busreid.rear_occupancy import RearOccupancyResult  # noqa: E402
 from busreid.video import redact_source  # noqa: E402
 from busreid.workers import DualCameraRunner  # noqa: E402
@@ -33,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Independent FRONT-IN / REAR-OUT AI counting")
     parser.add_argument("--front")
     parser.add_argument("--rear")
-    parser.add_argument("--rear-mode", choices=("door_out", "occupancy_headcount"), default="door_out")
+    parser.add_argument("--rear-mode", choices=("door_out", "occupancy_headcount", "head_tracking_zone_out"), default="door_out")
     parser.add_argument("--config", default="configs/cameras.yaml")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--max-frames", type=int)
@@ -85,7 +86,8 @@ def main(argv: list[str] | None = None) -> int:
             camera: {
                 "status": result.status,
                 "frames": result.frames,
-                "mode": "OCCUPANCY_HEADCOUNT" if isinstance(result, RearOccupancyResult) else "DOOR_COUNT",
+                "mode": "OCCUPANCY_HEADCOUNT" if isinstance(result, RearOccupancyResult)
+                else "HEAD_TRACKING_ZONE_OUT" if isinstance(result, RearHeadOutResult) else "DOOR_COUNT",
                 "count": None if isinstance(result, RearOccupancyResult) else len(result.events),
                 "visible_head_count": result.last_count if isinstance(result, RearOccupancyResult) else None,
                 "processing_fps": result.processing_fps,

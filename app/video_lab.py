@@ -102,7 +102,7 @@ def start_job(
         raise ValueError("Phiên đếm độc lập không nhận Trip hoặc telemetry")
     if start_frame and not session_only:
         raise ValueError("Chọn frame bắt đầu chỉ hỗ trợ Test ROI độc lập")
-    if rear_mode not in {"door_out", "occupancy_headcount"}:
+    if rear_mode not in {"door_out", "occupancy_headcount", "head_tracking_zone_out"}:
         raise ValueError("REAR mode không hợp lệ")
     if rear_mode != "door_out" and (not session_only or "rear" not in sources):
         raise ValueError("Head Detection chỉ hỗ trợ REAR trong phiên đếm độc lập")

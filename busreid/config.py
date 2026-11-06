@@ -48,11 +48,31 @@ class RearOccupancyConfig:
 
 
 @dataclass(slots=True)
+class RearHeadOutConfig:
+    """Independent experimental head crossing zones; never writes business events."""
+
+    model: str = "11n-head.pt"
+    tracker: str = "bytetrack.yaml"
+    confidence: float = 0.35
+    iou: float = 0.5
+    imgsz: int = 640
+    device: str = "auto"
+    roi: list[tuple[float, float]] = field(default_factory=lambda: [(0, 0), (1, 0), (1, 1), (0, 1)])
+    zone_a: list[tuple[float, float]] = field(default_factory=list)
+    zone_b: list[tuple[float, float]] = field(default_factory=list)
+    min_stable_frames: int = 2
+    state_ttl_frames: int = 90
+    id_switch_grace_frames: int = 5
+    id_switch_max_distance: float = 0.08
+
+
+@dataclass(slots=True)
 class AppConfig:
     database_url: str
     detector: DetectorConfig
     cameras: dict[str, CameraConfig]
     rear_occupancy: RearOccupancyConfig = field(default_factory=RearOccupancyConfig)
+    rear_head_out: RearHeadOutConfig = field(default_factory=RearHeadOutConfig)
 
 
 def _polygon(value: list[list[float]]) -> list[tuple[float, float]]:
@@ -96,7 +116,23 @@ def load_config(path: str | Path = "configs/cameras.yaml") -> AppConfig:
         ignore=[_polygon(points) for points in occupancy_raw.get("ignore", [])],
         smoothing_window=int(occupancy_raw.get("smoothing_window", 1)),
     )
-    from .roi import validate_polygon
+    head_raw = raw.get("rear_head_out", {})
+    head = RearHeadOutConfig(
+        model=str(head_raw.get("model", occupancy.model)),
+        tracker=str(head_raw.get("tracker", "bytetrack.yaml")),
+        confidence=float(head_raw.get("confidence", occupancy.confidence)),
+        iou=float(head_raw.get("iou", occupancy.iou)),
+        imgsz=int(head_raw.get("imgsz", occupancy.imgsz)),
+        device=str(head_raw.get("device", occupancy.device)),
+        roi=_polygon(head_raw.get("roi", [[0, 0], [1, 0], [1, 1], [0, 1]])),
+        zone_a=_polygon(head_raw.get("zone_a", cameras["rear"].zone_a)),
+        zone_b=_polygon(head_raw.get("zone_b", cameras["rear"].zone_b)),
+        min_stable_frames=int(head_raw.get("min_stable_frames", 2)),
+        state_ttl_frames=int(head_raw.get("state_ttl_frames", 90)),
+        id_switch_grace_frames=int(head_raw.get("id_switch_grace_frames", 5)),
+        id_switch_max_distance=float(head_raw.get("id_switch_max_distance", 0.08)),
+    )
+    from .roi import validate_polygon, validate_zones
 
     validate_polygon(occupancy.roi)
     for polygon in occupancy.ignore:
@@ -105,9 +141,20 @@ def load_config(path: str | Path = "configs/cameras.yaml") -> AppConfig:
         raise ValueError("Head Detection confidence/IoU must be in (0, 1]")
     if occupancy.imgsz < 32 or occupancy.smoothing_window < 1:
         raise ValueError("Head Detection imgsz/window must be positive")
+    validate_polygon(head.roi)
+    validate_zones(head.zone_a, head.zone_b)
+    if not 0 < head.confidence <= 1 or not 0 < head.iou <= 1 or head.imgsz < 32:
+        raise ValueError("Head OUT confidence/IoU/imgsz invalid")
+    if min(head.min_stable_frames, head.state_ttl_frames, head.id_switch_grace_frames) < 1:
+        raise ValueError("Head OUT frame limits must be positive")
+    if not 0 < head.id_switch_max_distance <= 1:
+        raise ValueError("Head OUT ID switch distance must be in (0, 1]")
+    if head.tracker not in {"bytetrack.yaml", "botsort.yaml"}:
+        raise ValueError("Head OUT tracker must be bytetrack.yaml or botsort.yaml")
     return AppConfig(
         database_url=raw.get("database_url", "sqlite:///data/busstop_flow.db"),
         detector=DetectorConfig(**raw.get("detector", {})),
         cameras=cameras,
         rear_occupancy=occupancy,
+        rear_head_out=head,
     )

@@ -75,7 +75,14 @@ def _camera_progress(job: dict | None, camera: str) -> dict | None:
     if not job or camera not in job["sources"]:
         return None
     returncode = job["process"].poll()
-    progress = camera_status(job["output"], camera, returncode)
+    if camera == "rear" and job.get("rear_mode") == "head_tracking_zone_out":
+        path = job["output"] / "rear_head_out_progress.json"
+        try:
+            progress = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            progress = {"status": "QUEUED" if returncode is None else "FAILED", "frames": 0}
+    else:
+        progress = camera_status(job["output"], camera, returncode)
     summary = _summary(job["output"])
     if camera in summary.get("errors", {}):
         progress["status"] = "FAILED"
@@ -85,11 +92,25 @@ def _camera_progress(job: dict | None, camera: str) -> dict | None:
     return progress
 
 
+def _show_preview(path: Path, caption: str) -> bool:
+    """A Windows writer can briefly lock a preview during atomic replacement."""
+    try:
+        data = path.read_bytes()
+    except (OSError, PermissionError):
+        return False
+    if not data:
+        return False
+    st.image(data, caption=caption)
+    return True
+
+
 def _camera_view(job: dict | None, camera: str) -> dict | None:
     title, direction, counter_label = _DIRECTIONS[camera]
     head_mode = camera == "rear" and bool(job and job.get("rear_mode") == "occupancy_headcount")
+    zone_mode = camera == "rear" and bool(job and job.get("rear_mode") == "head_tracking_zone_out")
     with st.container(border=True):
-        st.subheader("Camera sau – Head Detection (thử nghiệm)" if head_mode else title)
+        st.subheader("Camera sau – Head Detection (thử nghiệm)" if head_mode else
+                     "Camera sau – Head Tracking + Zone OUT (thử nghiệm)" if zone_mode else title)
         progress = _camera_progress(job, camera)
         if progress is None:
             st.info("Chưa kết nối · chưa có kết quả quan sát từ cửa này.")
@@ -110,7 +131,7 @@ def _camera_view(job: dict | None, camera: str) -> dict | None:
             if state in {"COMPLETED", "STOPPED"} and annotated.is_file():
                 st.video(str(annotated), format="video/mp4")
             elif preview.is_file() and state == "RUNNING":
-                st.image(preview.read_bytes(), caption="Frame Head Detection mới nhất")
+                _show_preview(preview, "Frame Head Detection mới nhất")
             if progress.get("error"):
                 st.error(str(progress["error"]))
             total = progress.get("total_frames")
@@ -120,6 +141,33 @@ def _camera_view(job: dict | None, camera: str) -> dict | None:
             if state in {"COMPLETED", "STOPPED"} and csv_path.is_file():
                 st.download_button("Tải CSV occupancy", csv_path.read_bytes(),
                                    file_name=f"{output.name}_rear_occupancy.csv", mime="text/csv")
+            return progress
+        if zone_mode:
+            frames = int(progress.get("frames", 0))
+            count = progress.get("count") if frames and state != "FAILED" else None
+            st.caption(f"{_STATUS.get(state, state)} · đầu đi A → vùng chuyển tiếp → B · kết quả thử nghiệm")
+            st.metric("REAR HEAD-OUT", count if count is not None else "Chưa có kết quả")
+            st.caption(f"{frames} frame · {float(progress.get('processing_fps', 0)):.1f} FPS xử lý · "
+                       f"{progress.get('model', '11n-head.pt')} · {progress.get('tracker', 'bytetrack.yaml')}")
+            output = job["output"]
+            annotated = output / "rear_head_out_annotated.mp4"
+            preview = output / "rear_head_out_preview.jpg"
+            if state in {"COMPLETED", "STOPPED"} and annotated.is_file():
+                st.video(str(annotated), format="video/mp4")
+            elif state == "RUNNING" and preview.is_file():
+                _show_preview(preview, "Frame Head Tracking mới nhất")
+            if progress.get("error"):
+                st.error(str(progress["error"]))
+            total = progress.get("total_frames")
+            if total and state == "RUNNING":
+                st.progress(min(frames / total, 1.0))
+            csv_path = output / "rear_head_out_events.csv"
+            if state in {"COMPLETED", "STOPPED"} and csv_path.is_file():
+                try:
+                    st.download_button("Tải CSV Head-OUT", csv_path.read_bytes(),
+                                       file_name=f"{output.name}_rear_head_out_events.csv", mime="text/csv")
+                except OSError:
+                    st.caption("CSV đang được ghi; vui lòng thử lại.")
             return progress
         st.caption(f"{_STATUS.get(state, state)} · chỉ đếm {direction} theo A → B")
         count = int(progress.get("counts", {}).get(direction, 0))
@@ -140,7 +188,7 @@ def _camera_view(job: dict | None, camera: str) -> dict | None:
             st.video(str(annotated), format="video/mp4")
             st.caption("Video phát lại đã chú thích · H.264")
         elif preview.is_file():
-            st.image(preview.read_bytes(), caption="Frame AI đã xử lý · cập nhật theo chu kỳ")
+            _show_preview(preview, "Frame AI đã xử lý · cập nhật theo chu kỳ")
         elif state == "FAILED":
             st.error("Không mở hoặc xử lý được nguồn hình ảnh này.")
         else:
@@ -173,28 +221,33 @@ def _results(job: dict | None) -> None:
     with right:
         rear = _camera_view(job, "rear")
     head_mode = bool(job and job.get("rear_mode") == "occupancy_headcount" and "rear" in job["sources"])
+    zone_mode = bool(job and job.get("rear_mode") == "head_tracking_zone_out" and "rear" in job["sources"])
+    experimental = head_mode or zone_mode
     total_in = int(front.get("counts", {}).get("IN", 0)) if front and front.get("frames", 0) else None
-    total_out = int(rear.get("counts", {}).get("OUT", 0)) if rear and rear.get("frames", 0) and not head_mode else None
-    metrics = st.columns(4 if head_mode else 3)
+    total_out = int(rear.get("counts", {}).get("OUT", 0)) if rear and rear.get("frames", 0) and not experimental else None
+    metrics = st.columns(4 if experimental else 3)
     metrics[0].metric(
         "Tổng khách lên", total_in if total_in is not None else "Chưa có frame" if front else "Chưa kết nối"
     )
     metrics[1].metric(
         "Tổng khách xuống",
-        "N/A – Chế độ thử nghiệm" if head_mode else total_out if total_out is not None else "Chưa có frame" if rear else "Chưa kết nối",
+        "N/A – Chế độ thử nghiệm" if experimental else total_out if total_out is not None else "Chưa có frame" if rear else "Chưa kết nối",
     )
     metrics[2].metric(
         "Tổng lượt ghi nhận",
-        "N/A – thiếu REAR-OUT" if head_mode else (total_in or 0) + (total_out or 0)
+        "N/A – thiếu REAR-OUT" if experimental else (total_in or 0) + (total_out or 0)
         if total_in is not None or total_out is not None
         else "Chưa có frame",
     )
     if head_mode:
         visible = rear.get("visible_head_count") if rear and rear.get("frames", 0) and rear.get("status") != "FAILED" else None
         metrics[3].metric("Occupancy quan sát", visible if visible is not None else "Chưa có kết quả")
+    if zone_mode:
+        count = rear.get("count") if rear and rear.get("frames", 0) and rear.get("status") != "FAILED" else None
+        metrics[3].metric("Head-OUT thử nghiệm", count if count is not None else "Chưa có kết quả")
     if not job:
         return
-    event_cameras = [camera for camera in job["sources"] if camera != "rear" or not head_mode]
+    event_cameras = [camera for camera in job["sources"] if camera != "rear" or not experimental]
     rows = event_timeline(job["output"], event_cameras)
     if rows:
         st.markdown("#### Sự kiện đi qua cửa")
@@ -208,6 +261,16 @@ def _results(job: dict | None) -> None:
             st.warning("Có Track ID được đếm nhiều lần; cần xem lại video/ROI trước khi kết luận số khách.")
     elif job["process"].poll() is not None:
         st.info("Chưa phát hiện lượt đi qua cửa hợp lệ.")
+    if zone_mode:
+        csv_path = job["output"] / "rear_head_out_events.csv"
+        if csv_path.is_file():
+            try:
+                head_rows = pd.read_csv(csv_path)
+            except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
+                head_rows = pd.DataFrame()
+            if not head_rows.empty:
+                st.markdown("#### Sự kiện REAR Head-OUT thử nghiệm")
+                st.dataframe(head_rows, use_container_width=True, hide_index=True)
 
 
 def render_counting_tab(root: Path) -> None:
@@ -223,7 +286,8 @@ def render_counting_tab(root: Path) -> None:
             if camera == "rear":
                 rear_mode = st.selectbox(
                     "Chế độ xử lý camera sau",
-                    ["Đếm khách xuống qua cửa", "Thử nghiệm đếm khách trong xe (Head Detection)"],
+                    ["Đếm khách xuống qua cửa", "Thử nghiệm đếm khách trong xe (Head Detection)",
+                     "Thử nghiệm Head Tracking + Zone OUT"],
                     key="counting_rear_mode",
                 )
             inputs[camera] = _source_picker(camera)
@@ -272,6 +336,11 @@ def render_counting_tab(root: Path) -> None:
                     if source.lower().endswith(".mp4") and first_frame(source) is None:
                         raise ValueError(f"{camera.upper()}: không đọc được frame MP4 đầu tiên")
                     sources[camera] = source
+            selected_rear_mode = (
+                "head_tracking_zone_out" if "rear" in sources and rear_mode == "Thử nghiệm Head Tracking + Zone OUT"
+                else "occupancy_headcount" if "rear" in sources and rear_mode.startswith("Thử nghiệm")
+                else "door_out"
+            )
             process = start_job(
                 root,
                 output,
@@ -279,7 +348,7 @@ def render_counting_tab(root: Path) -> None:
                 max_frames=int(max_frames),
                 hidden_layers=hidden,
                 session_only=True,
-                rear_mode="occupancy_headcount" if "rear" in sources and rear_mode.startswith("Thử nghiệm") else "door_out",
+                rear_mode=selected_rear_mode,
             )
         except (OSError, ValueError) as exc:
             st.error(str(exc))
@@ -288,7 +357,7 @@ def render_counting_tab(root: Path) -> None:
                 "process": process,
                 "output": output,
                 "sources": sources,
-                "rear_mode": "occupancy_headcount" if "rear" in sources and rear_mode.startswith("Thử nghiệm") else "door_out",
+                "rear_mode": selected_rear_mode,
             }
             st.rerun()
 

@@ -231,7 +231,11 @@ class RearOccupancyPipeline:
                         preview = destination / "rear_preview.jpg"
                         temporary = preview.with_suffix(".tmp.jpg")
                         if cv2.imwrite(str(temporary), output_frame):
-                            _replace_with_retry(temporary, preview)
+                            try:
+                                _replace_with_retry(temporary, preview)
+                            except PermissionError:
+                                # Preview is best effort on Windows; a reader can lock the old JPEG.
+                                temporary.unlink(missing_ok=True)
                     if processed == 1 or processed % 10 == 0:
                         elapsed = time.perf_counter() - started
                         _write_progress(progress, mode="OCCUPANCY_HEADCOUNT", status="RUNNING",
