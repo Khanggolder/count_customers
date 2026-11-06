@@ -12,6 +12,8 @@ from typing import BinaryIO
 
 import cv2
 
+from busreid.config import load_config
+
 
 def save_upload(upload: BinaryIO, filename: str, destination: Path) -> Path:
     if Path(filename).suffix.lower() != ".mp4":
@@ -106,6 +108,11 @@ def start_job(
         raise ValueError("REAR mode không hợp lệ")
     if rear_mode != "door_out" and (not session_only or "rear" not in sources):
         raise ValueError("Chế độ thử nghiệm chỉ hỗ trợ REAR trong phiên đếm độc lập")
+    if rear_mode == "flow_line_out" and not load_config(root / "configs" / "cameras.yaml").rear_flow_out.enabled:
+        raise ValueError(
+            "REAR Optical Flow chưa được cấu hình. Vào tab Thiết lập vùng đếm (ROI), "
+            "chọn REAR Optical Flow, vẽ ROI/Counting Line/hướng OUT rồi bấm Lưu Optical Flow ROI."
+        )
     output.mkdir(parents=True, exist_ok=True)
     config_snapshot = output / "cameras_snapshot.yaml"
     shutil.copy2(root / "configs" / "cameras.yaml", config_snapshot)

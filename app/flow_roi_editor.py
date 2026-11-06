@@ -88,6 +88,9 @@ def render_flow_roi_editor(root: Path) -> None:
                                  "revision": 0, "saved_revision": 0,
                                  "source": None, "upload_identity": None}
     state = st.session_state[key]
+    flow_enabled = load_config(config_path).rear_flow_out.enabled
+    if not flow_enabled:
+        st.info("Chưa lưu cấu hình Optical Flow. Vẽ ROI, Counting Line và hướng OUT rồi bấm Lưu Optical Flow ROI trước khi chạy.")
     source, is_mp4 = _select_source(root, "rear_flow_out", state)
     frame = None
     frame_index = 0
@@ -166,6 +169,7 @@ def render_flow_roi_editor(root: Path) -> None:
             backup = save_flow_geometry(config_path, state["draft"]["roi"],
                                         state["draft"]["line"], state["draft"]["direction"])
             state["saved_revision"] = state["revision"]
+            flow_enabled = True
             st.success(f"Đã lưu; bản sao: {backup.name}. Phiên mới sẽ dùng cấu hình này.")
         except (ValueError, OSError) as exc:
             st.error(str(exc))
@@ -182,7 +186,7 @@ def render_flow_roi_editor(root: Path) -> None:
     limit = st.number_input("Số frame", min_value=2, max_value=1200, value=120, key="flow_roi_limit")
     job = st.session_state.get("flow_roi_test_job")
     busy = bool(job and job["process"].poll() is None)
-    if st.button("Test Optical Flow ROI", disabled=busy or not valid or source is None
+    if st.button("Test Optical Flow ROI", disabled=busy or not valid or not flow_enabled or source is None
                  or state["revision"] != state["saved_revision"]):
         output = new_job_dir(root, "ai_counting")
         try:

@@ -147,15 +147,17 @@ def test_flow_editor_preview_click_and_worker_snapshot(tmp_path: Path, monkeypat
     launched = []
     monkeypatch.setattr("app.video_lab.subprocess.Popen",
                         lambda command, **_kwargs: launched.append(command) or type("Job", (), {"poll": lambda _self: None})())
-    start_job(tmp_path, tmp_path / "before", {"rear": "rear.mp4"},
-              rear_mode="flow_line_out", session_only=True)
+    with pytest.raises(ValueError, match="Lưu Optical Flow ROI"):
+        start_job(tmp_path, tmp_path / "before", {"rear": "rear.mp4"},
+                  rear_mode="flow_line_out", session_only=True)
+    assert not launched
+    assert not (tmp_path / "before" / "cameras_snapshot.yaml").exists()
     save_flow_geometry(path, ROI, LINE, (0, -1))
     start_job(tmp_path, tmp_path / "after", {"rear": "rear.mp4"},
               rear_mode="flow_line_out", session_only=True)
     assert not old.rear_flow_out.enabled
-    assert not load_config(tmp_path / "before" / "cameras_snapshot.yaml").rear_flow_out.enabled
     assert load_config(tmp_path / "after" / "cameras_snapshot.yaml").rear_flow_out.enabled
-    assert all("flow_line_out" in command for command in launched)
+    assert len(launched) == 1 and "flow_line_out" in launched[0]
 
 
 def test_flow_evaluator_keeps_passenger_accuracy_na() -> None:

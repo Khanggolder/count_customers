@@ -9,6 +9,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from busreid.config import load_config
+
 from .video_lab import camera_status, event_timeline, first_frame, new_job_dir, resolve_source, start_job
 
 _DIRECTIONS = {
@@ -332,6 +334,14 @@ def render_counting_tab(root: Path) -> None:
                 )
             inputs[camera] = _source_picker(camera)
 
+    flow_selected = rear_mode == "Thử nghiệm Optical Flow + Line Counting"
+    flow_ready = not flow_selected or load_config(root / "configs" / "cameras.yaml").rear_flow_out.enabled
+    if not flow_ready:
+        st.warning(
+            "REAR Optical Flow chưa được cấu hình. Mở tab Thiết lập vùng đếm (ROI), "
+            "chọn REAR Optical Flow, vẽ ROI/Counting Line/hướng OUT rồi bấm Lưu Optical Flow ROI."
+        )
+
     with st.expander("Tùy chọn hiển thị và chạy", expanded=False):
         layers = {
             "boxes": "Khung người",
@@ -354,7 +364,7 @@ def render_counting_tab(root: Path) -> None:
         st.caption("Zone A/B lấy từ cấu hình camera; hiệu chỉnh theo đúng góc quay trước khi đánh giá đếm.")
 
     buttons = st.columns(3)
-    start = buttons[0].button("Bắt đầu đếm", type="primary", disabled=running)
+    start = buttons[0].button("Bắt đầu đếm", type="primary", disabled=running or not flow_ready)
     stop = buttons[1].button("Dừng đếm", disabled=not running)
     reset = buttons[2].button("Đặt lại bộ đếm", disabled=running or not job)
     if stop and job:
