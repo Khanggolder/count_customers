@@ -123,6 +123,54 @@ def validate_head_out_zones(roi: list[Point], zone_a: list[Point], zone_b: list[
             raise ValueError(f"Zone {label} phải nằm hoàn toàn trong ROI")
 
 
+def validate_flow_geometry(roi: list[Point], line: list[Point], direction: Point) -> None:
+    """The OUT arrow is an explicit side, independent of line point order."""
+    import math
+
+    validate_polygon(roi)
+    if len(line) != 2 or any(len(point) != 2 for point in line):
+        raise ValueError("Counting Line cần đúng hai điểm")
+    if any(not all(math.isfinite(value) and 0 <= value <= 1 for value in point) for point in line):
+        raise ValueError("Counting Line nằm ngoài frame")
+    if line[0] == line[1] or not _edge_inside_polygon(line[0], line[1], roi):
+        raise ValueError("Counting Line phải nằm hoàn toàn trong ROI")
+    if len(direction) != 2 or not all(math.isfinite(value) for value in direction):
+        raise ValueError("Hướng OUT không hợp lệ")
+    dx, dy = line[1][0] - line[0][0], line[1][1] - line[0][1]
+    cross = dx * direction[1] - dy * direction[0]
+    if abs(cross) < 1e-6 or math.hypot(*direction) < 1e-6:
+        raise ValueError("Hướng OUT phải cắt ngang Counting Line")
+
+
+def save_flow_geometry(path: Path, roi: list[Point], line: list[Point], direction: Point) -> Path:
+    validate_flow_geometry(roi, line, direction)
+    load_config(path)
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    backup = path.with_name(f"{path.name}.rear_flow_out.bak")
+    _write_yaml(backup, raw)
+    raw.setdefault("rear_flow_out", {}).update({
+        "enabled": True, "roi": [list(point) for point in roi],
+        "counting_line": [list(point) for point in line],
+        "out_direction": list(direction),
+    })
+    _write_yaml(path, raw)
+    return backup
+
+
+def restore_flow_geometry(path: Path) -> Path:
+    backup = path.with_name(f"{path.name}.rear_flow_out.bak")
+    if not backup.is_file():
+        raise FileNotFoundError("Chưa có bản sao lưu REAR Optical Flow")
+    load_config(backup)
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    previous = yaml.safe_load(backup.read_text(encoding="utf-8"))
+    recovery = path.with_name(f"{path.name}.rear_flow_out.pre-restore.bak")
+    _write_yaml(recovery, raw)
+    raw["rear_flow_out"] = previous.get("rear_flow_out", {})
+    _write_yaml(path, raw)
+    return recovery
+
+
 def _write_yaml(path: Path, raw: dict) -> None:
     temporary = path.with_name(path.name + ".tmp")
     try:

@@ -102,10 +102,10 @@ def start_job(
         raise ValueError("Phiên đếm độc lập không nhận Trip hoặc telemetry")
     if start_frame and not session_only:
         raise ValueError("Chọn frame bắt đầu chỉ hỗ trợ Test ROI độc lập")
-    if rear_mode not in {"door_out", "occupancy_headcount", "head_tracking_zone_out"}:
+    if rear_mode not in {"door_out", "occupancy_headcount", "head_tracking_zone_out", "flow_line_out"}:
         raise ValueError("REAR mode không hợp lệ")
     if rear_mode != "door_out" and (not session_only or "rear" not in sources):
-        raise ValueError("Head Detection chỉ hỗ trợ REAR trong phiên đếm độc lập")
+        raise ValueError("Chế độ thử nghiệm chỉ hỗ trợ REAR trong phiên đếm độc lập")
     output.mkdir(parents=True, exist_ok=True)
     config_snapshot = output / "cameras_snapshot.yaml"
     shutil.copy2(root / "configs" / "cameras.yaml", config_snapshot)

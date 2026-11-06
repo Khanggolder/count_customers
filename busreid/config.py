@@ -67,12 +67,33 @@ class RearHeadOutConfig:
 
 
 @dataclass(slots=True)
+class RearFlowOutConfig:
+    """Experimental motion events, never authoritative passenger counts."""
+
+    enabled: bool = False
+    roi: list[tuple[float, float]] = field(default_factory=lambda: [(0, 0), (1, 0), (1, 1), (0, 1)])
+    counting_line: list[tuple[float, float]] = field(default_factory=lambda: [(0.2, 0.5), (0.8, 0.5)])
+    out_direction: tuple[float, float] = (0.0, 1.0)
+    flow_method: str = "farneback"
+    stabilization: bool = False
+    clahe: bool = False
+    gaussian_blur: bool = True
+    min_motion_magnitude: float = 1.0
+    smoothing_window: int = 5
+    min_active_fraction: float = 0.08
+    min_event_frames: int = 2
+    max_gap_frames: int = 3
+    debounce_frames: int = 6
+
+
+@dataclass(slots=True)
 class AppConfig:
     database_url: str
     detector: DetectorConfig
     cameras: dict[str, CameraConfig]
     rear_occupancy: RearOccupancyConfig = field(default_factory=RearOccupancyConfig)
     rear_head_out: RearHeadOutConfig = field(default_factory=RearHeadOutConfig)
+    rear_flow_out: RearFlowOutConfig = field(default_factory=RearFlowOutConfig)
 
 
 def _polygon(value: list[list[float]]) -> list[tuple[float, float]]:
@@ -132,7 +153,7 @@ def load_config(path: str | Path = "configs/cameras.yaml") -> AppConfig:
         id_switch_grace_frames=int(head_raw.get("id_switch_grace_frames", 5)),
         id_switch_max_distance=float(head_raw.get("id_switch_max_distance", 0.08)),
     )
-    from .roi import validate_head_out_zones, validate_polygon
+    from .roi import validate_flow_geometry, validate_head_out_zones, validate_polygon
 
     validate_polygon(occupancy.roi)
     for polygon in occupancy.ignore:
@@ -150,10 +171,34 @@ def load_config(path: str | Path = "configs/cameras.yaml") -> AppConfig:
         raise ValueError("Head OUT ID switch distance must be in (0, 1]")
     if head.tracker not in {"bytetrack.yaml", "botsort.yaml"}:
         raise ValueError("Head OUT tracker must be bytetrack.yaml or botsort.yaml")
+    flow_raw = raw.get("rear_flow_out", {})
+    flow = RearFlowOutConfig(
+        enabled=bool(flow_raw.get("enabled", False)),
+        roi=_polygon(flow_raw.get("roi", [[0, 0], [1, 0], [1, 1], [0, 1]])),
+        counting_line=[tuple(map(float, point)) for point in flow_raw.get("counting_line", [[.2, .5], [.8, .5]])],
+        out_direction=tuple(map(float, flow_raw.get("out_direction", [0, 1]))),
+        flow_method=str(flow_raw.get("flow_method", "farneback")),
+        stabilization=bool(flow_raw.get("stabilization", False)),
+        clahe=bool(flow_raw.get("clahe", False)),
+        gaussian_blur=bool(flow_raw.get("gaussian_blur", True)),
+        min_motion_magnitude=float(flow_raw.get("min_motion_magnitude", 1.0)),
+        smoothing_window=int(flow_raw.get("smoothing_window", 5)),
+        min_active_fraction=float(flow_raw.get("min_active_fraction", .08)),
+        min_event_frames=int(flow_raw.get("min_event_frames", 2)),
+        max_gap_frames=int(flow_raw.get("max_gap_frames", 3)),
+        debounce_frames=int(flow_raw.get("debounce_frames", 6)),
+    )
+    validate_flow_geometry(flow.roi, flow.counting_line, flow.out_direction)
+    if flow.flow_method != "farneback" or flow.min_motion_magnitude <= 0:
+        raise ValueError("REAR flow method or motion threshold invalid")
+    if not 0 < flow.min_active_fraction <= 1 or min(flow.smoothing_window, flow.min_event_frames,
+                                                    flow.max_gap_frames, flow.debounce_frames) < 1:
+        raise ValueError("REAR flow temporal limits invalid")
     return AppConfig(
         database_url=raw.get("database_url", "sqlite:///data/busstop_flow.db"),
         detector=DetectorConfig(**raw.get("detector", {})),
         cameras=cameras,
         rear_occupancy=occupancy,
         rear_head_out=head,
+        rear_flow_out=flow,
     )

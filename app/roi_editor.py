@@ -31,8 +31,10 @@ from .counting_tab import _show_preview, _show_video
 from .video_lab import camera_status, new_job_dir, save_upload, start_job
 
 _HEAD_TARGET = "rear_head_out"
+_FLOW_TARGET = "rear_flow_out"
 _LABELS = {"front": "FRONT – Person Detection", "rear": "REAR – Person Detection",
-           _HEAD_TARGET: "REAR – Head Tracking + Zone OUT"}
+           _HEAD_TARGET: "REAR – Head Tracking + Zone OUT",
+           _FLOW_TARGET: "REAR – Optical Flow Counting"}
 _COLORS = {"roi": (180, 255, 180), "a": (0, 200, 255), "b": (255, 180, 0)}
 
 
@@ -259,8 +261,13 @@ def render_roi_editor(root: Path) -> None:
     st.subheader("Thiết lập vùng đếm (ROI)")
     st.caption("FRONT Person: A → B = IN · REAR Person: A → B = OUT · REAR Head: A → Transition → B = OUT.")
     config_path = root / "configs" / "cameras.yaml"
-    target = st.selectbox("Camera", ["front", "rear", _HEAD_TARGET],
+    target = st.selectbox("Camera", ["front", "rear", _HEAD_TARGET, _FLOW_TARGET],
                           format_func=lambda value: _LABELS[value])
+    if target == _FLOW_TARGET:
+        from .flow_roi_editor import render_flow_roi_editor
+
+        render_flow_roi_editor(root)
+        return
     camera = "rear" if target == _HEAD_TARGET else target
     head_mode = target == _HEAD_TARGET
     state = _editor_state(target, config_path)

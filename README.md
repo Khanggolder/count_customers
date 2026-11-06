@@ -1,5 +1,7 @@
 # BusStop Flow AI
 
+> Nhánh thử nghiệm `experiment/rear-optical-flow-counting` có chế độ **REAR Optical Flow + Counting Line** độc lập với YOLO/ByteTrack. Trong tab ROI, chọn **REAR – Optical Flow Counting** để vẽ ROI, đường đếm và hướng OUT; lưu rồi chọn chế độ Optical Flow trong tab **Đếm khách AI**. Chế độ này báo **motion events**, còn số hành khách và accuracy là **N/A** khi chưa có ground truth/hiệu chuẩn. Cách chạy, output và giới hạn: [REAR_FLOW_COUNTING_EXPERIMENT.md](docs/REAR_FLOW_COUNTING_EXPERIMENT.md).
+
 MVP end-to-end đếm khách **lên ở cửa trước (FRONT-IN)** và **xuống ở cửa sau (REAR-OUT)**, rồi tổng hợp theo từng lần xe phục vụ trạm. Đây là giả định vận hành bắt buộc; đơn vị vận tải phải duy trì quy tắc một chiều này khi triển khai. Hệ thống giữ YOLO11n, ByteTrack, MP4/RTSP, FastAPI, SQLite và Streamlit; không có Person Re-ID.
 
 Demo mặc định chạy offline sau khi cài dependency. Scenario v2 tạo chuyến 8 trạm với GPS/tốc độ/cửa và chỉ có event FRONT-IN, REAR-OUT. Mọi màn hình/API đều gắn nhãn `SIMULATED`; đây là kiểm thử nghiệp vụ, không phải độ chính xác AI.

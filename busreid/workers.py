@@ -8,6 +8,7 @@ from threading import Event, Lock
 
 from .config import AppConfig
 from .pipeline import CameraPipeline, OverlayOptions, PipelineCancelled, PipelineResult
+from .rear_flow_counting import FlowResult, RearFlowPipeline
 from .rear_head_out import RearHeadOutPipeline, RearHeadOutResult
 from .rear_occupancy import RearOccupancyPipeline, RearOccupancyResult
 
@@ -20,7 +21,7 @@ class WorkerStatus:
 
 @dataclass(slots=True)
 class DualCameraResult:
-    results: dict[str, PipelineResult | RearOccupancyResult | RearHeadOutResult] = field(default_factory=dict)
+    results: dict[str, PipelineResult | RearOccupancyResult | RearHeadOutResult | FlowResult] = field(default_factory=dict)
     errors: dict[str, str] = field(default_factory=dict)
     cancelled: bool = False
 
@@ -49,7 +50,7 @@ class DualCameraRunner:
         stop_file: Path | None,
         start_frame: int,
         rear_mode: str,
-    ) -> PipelineResult | RearOccupancyResult | RearHeadOutResult:
+    ) -> PipelineResult | RearOccupancyResult | RearHeadOutResult | FlowResult:
         with self._lock:
             self.status[camera].state = "RUNNING"
         if self.cancel_event.is_set():
@@ -74,6 +75,11 @@ class DualCameraRunner:
                 source, output_dir, max_frames=max_frames, stop_file=stop_file,
                 start_frame=start_frame, overlay=overlay,
             )
+        elif camera == "rear" and rear_mode == "flow_line_out":
+            result = RearFlowPipeline(self.config.rear_flow_out).run(
+                source, output_dir, max_frames=max_frames, stop_file=stop_file,
+                start_frame=start_frame, show_vectors=bool(overlay and overlay.trajectory),
+            )
         else:
             result = CameraPipeline(self.config.cameras[camera], self.config).run(source, output_dir, **options)
         with self._lock:
@@ -92,7 +98,7 @@ class DualCameraRunner:
         start_frame: int = 0,
         rear_mode: str = "door_out",
     ) -> DualCameraResult:
-        if rear_mode not in {"door_out", "occupancy_headcount", "head_tracking_zone_out"}:
+        if rear_mode not in {"door_out", "occupancy_headcount", "head_tracking_zone_out", "flow_line_out"}:
             raise ValueError(f"Unknown REAR mode: {rear_mode}")
         valid = {
             camera: source for camera, source in sources.items() if source and camera in self.config.cameras

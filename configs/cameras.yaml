@@ -33,6 +33,22 @@ rear_head_out:
   state_ttl_frames: 90
   id_switch_grace_frames: 5
   id_switch_max_distance: 0.08
+rear_flow_out:
+  # Experimental motion-only pipeline. Set ROI, line and OUT arrow in Streamlit before enabling.
+  enabled: false
+  roi: [[0, 0], [1, 0], [1, 1], [0, 1]]
+  counting_line: [[0.2, 0.5], [0.8, 0.5]]
+  out_direction: [0, 1]
+  flow_method: farneback
+  stabilization: false
+  clahe: false
+  gaussian_blur: true
+  min_motion_magnitude: 1.0
+  smoothing_window: 5
+  min_active_fraction: 0.08
+  min_event_frames: 2
+  max_gap_frames: 3
+  debounce_frames: 6
 cameras:
   front:
     role: front

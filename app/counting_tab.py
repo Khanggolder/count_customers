@@ -75,8 +75,9 @@ def _camera_progress(job: dict | None, camera: str) -> dict | None:
     if not job or camera not in job["sources"]:
         return None
     returncode = job["process"].poll()
-    if camera == "rear" and job.get("rear_mode") == "head_tracking_zone_out":
-        path = job["output"] / "rear_head_out_progress.json"
+    if camera == "rear" and job.get("rear_mode") in {"head_tracking_zone_out", "flow_line_out"}:
+        stem = "rear_flow" if job.get("rear_mode") == "flow_line_out" else "rear_head_out"
+        path = job["output"] / f"{stem}_progress.json"
         try:
             progress = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -117,14 +118,41 @@ def _camera_view(job: dict | None, camera: str) -> dict | None:
     title, direction, counter_label = _DIRECTIONS[camera]
     head_mode = camera == "rear" and bool(job and job.get("rear_mode") == "occupancy_headcount")
     zone_mode = camera == "rear" and bool(job and job.get("rear_mode") == "head_tracking_zone_out")
+    flow_mode = camera == "rear" and bool(job and job.get("rear_mode") == "flow_line_out")
     with st.container(border=True):
-        st.subheader("Camera sau – Head Detection (thử nghiệm)" if head_mode else
+        st.subheader("Camera sau – Optical Flow (thử nghiệm)" if flow_mode else
+                     "Camera sau – Head Detection (thử nghiệm)" if head_mode else
                      "Camera sau – Head Tracking + Zone OUT (thử nghiệm)" if zone_mode else title)
         progress = _camera_progress(job, camera)
         if progress is None:
             st.info("Chưa kết nối · chưa có kết quả quan sát từ cửa này.")
             return None
         state = progress.get("status", "QUEUED")
+        if flow_mode:
+            output = job["output"]
+            st.caption(f"{_STATUS.get(state, state)} · chuyển động qua Counting Line; chưa hiệu chuẩn số người")
+            st.metric("OUT motion events", progress.get("out_motion_events", progress.get("motion_events", 0)))
+            st.metric("Khách OUT ước lượng", "N/A")
+            st.caption(f"{progress.get('frames', 0)} frame · {float(progress.get('processing_fps', 0)):.1f} FPS")
+            video = output / "rear_flow_annotated.mp4"
+            preview = output / "rear_flow_preview.jpg"
+            if state in {"COMPLETED", "STOPPED"} and video.is_file():
+                _show_video(video)
+            elif preview.is_file():
+                _show_preview(preview, "Frame Optical Flow mới nhất")
+            slice_path = output / "rear_flow_temporal_slice.png"
+            if slice_path.is_file():
+                _show_preview(slice_path, "Temporal slice: ảnh line theo thời gian và signed flow")
+            for name in ("rear_flow_events.csv", "rear_flow_temporal_slice.png"):
+                path = output / name
+                if path.is_file():
+                    try:
+                        st.download_button(f"Tải {name}", path.read_bytes(), name)
+                    except OSError:
+                        st.caption(f"{name} đang được ghi; thử lại sau.")
+            if progress.get("error"):
+                st.error(str(progress["error"]))
+            return progress
         if head_mode:
             st.caption(f"{_STATUS.get(state, state)} · đếm đầu người nhìn thấy trong từng frame, không đếm lượt xuống")
             frames = int(progress.get("frames", 0))
@@ -231,7 +259,8 @@ def _results(job: dict | None) -> None:
         rear = _camera_view(job, "rear")
     head_mode = bool(job and job.get("rear_mode") == "occupancy_headcount" and "rear" in job["sources"])
     zone_mode = bool(job and job.get("rear_mode") == "head_tracking_zone_out" and "rear" in job["sources"])
-    experimental = head_mode or zone_mode
+    flow_mode = bool(job and job.get("rear_mode") == "flow_line_out" and "rear" in job["sources"])
+    experimental = head_mode or zone_mode or flow_mode
     total_in = int(front.get("counts", {}).get("IN", 0)) if front and front.get("frames", 0) else None
     total_out = int(rear.get("counts", {}).get("OUT", 0)) if rear and rear.get("frames", 0) and not experimental else None
     metrics = st.columns(4 if experimental else 3)
@@ -254,6 +283,8 @@ def _results(job: dict | None) -> None:
     if zone_mode:
         count = rear.get("count") if rear and rear.get("frames", 0) and rear.get("status") != "FAILED" else None
         metrics[3].metric("Head-OUT thử nghiệm", count if count is not None else "Chưa có kết quả")
+    if flow_mode:
+        metrics[3].metric("OUT motion events", rear.get("out_motion_events", 0) if rear else 0)
     if not job:
         return
     event_cameras = [camera for camera in job["sources"] if camera != "rear" or not experimental]
@@ -296,7 +327,7 @@ def render_counting_tab(root: Path) -> None:
                 rear_mode = st.selectbox(
                     "Chế độ xử lý camera sau",
                     ["Đếm khách xuống qua cửa", "Thử nghiệm đếm khách trong xe (Head Detection)",
-                     "Thử nghiệm Head Tracking + Zone OUT"],
+                     "Thử nghiệm Head Tracking + Zone OUT", "Thử nghiệm Optical Flow + Line Counting"],
                     key="counting_rear_mode",
                 )
             inputs[camera] = _source_picker(camera)
@@ -346,6 +377,8 @@ def render_counting_tab(root: Path) -> None:
                         raise ValueError(f"{camera.upper()}: không đọc được frame MP4 đầu tiên")
                     sources[camera] = source
             selected_rear_mode = (
+                "flow_line_out" if "rear" in sources and rear_mode == "Thử nghiệm Optical Flow + Line Counting"
+                else
                 "head_tracking_zone_out" if "rear" in sources and rear_mode == "Thử nghiệm Head Tracking + Zone OUT"
                 else "occupancy_headcount" if "rear" in sources and rear_mode.startswith("Thử nghiệm")
                 else "door_out"
