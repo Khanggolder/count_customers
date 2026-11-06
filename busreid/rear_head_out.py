@@ -9,6 +9,7 @@ from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import cv2
@@ -25,29 +26,95 @@ from .video_output import make_browser_video, validate_video
 
 
 class HeadTracker(HeadDetector):
-    """One single-class YOLO model and one ByteTrack/BoT-SORT state per run."""
+    """Detect on a masked ROI crop, then track only accepted head centers."""
 
     def __init__(self, config: RearHeadOutConfig) -> None:
         super().__init__(config)
-        self.tracker = config.tracker
+        from ultralytics.trackers.track import TRACKER_MAP
+        from ultralytics.utils import IterableSimpleNamespace, yaml_load
+        from ultralytics.utils.checks import check_yaml
+
+        tracker_args = IterableSimpleNamespace(**yaml_load(check_yaml(config.tracker)))
+        self.tracker = TRACKER_MAP[tracker_args.tracker_type](args=tracker_args, frame_rate=30)
+        self.roi_frame: HeadRoiFrame | None = None
+        self.roi = config.roi
         self.last_detection_count = 0
+        self.last_inference_s = 0.0
 
     def track(self, frame: np.ndarray) -> list[Detection]:
-        results = self.model.track(
-            source=frame, persist=True, classes=[0], conf=self.confidence, iou=self.iou,
-            imgsz=self.imgsz, device=self.device, tracker=self.tracker, verbose=False,
+        if self.roi_frame is None:
+            self.roi_frame = HeadRoiFrame(frame.shape, self.roi)
+        if frame.shape[:2] != (self.roi_frame.height, self.roi_frame.width):
+            raise ValueError("REAR frame size changed during tracking; start a new session")
+        crop = self.roi_frame.crop_masked(frame)
+        started = time.perf_counter()
+        results = self.model.predict(
+            source=crop, classes=[0], conf=self.confidence, iou=self.iou,
+            imgsz=self.imgsz, device=self.device, verbose=False,
         )
-        self.last_detection_count = len(results[0].boxes.xyxy) if results and results[0].boxes is not None else 0
-        if not results or results[0].boxes is None or results[0].boxes.id is None:
-            return []
-        boxes = results[0].boxes
-        xyxy = boxes.xyxy.detach().cpu().numpy().astype(int)
-        ids = boxes.id.detach().cpu().numpy().astype(int)
-        confs = boxes.conf.detach().cpu().numpy()
-        return [
-            Detection(f"rear:head{track_id:05d}", tuple(int(v) for v in box), float(confidence))
-            for box, track_id, confidence in zip(xyxy, ids, confs, strict=True)
-        ]
+        self.last_inference_s = time.perf_counter() - started
+        boxes = results[0].boxes if results else None
+        xyxy = boxes.xyxy.detach().cpu().numpy() if boxes is not None else np.empty((0, 4))
+        scores = boxes.conf.detach().cpu().numpy() if boxes is not None else np.empty(0)
+        accepted = [i for i, box in enumerate(xyxy) if self.roi_frame.contains_crop_box(box)]
+        self.last_detection_count = len(accepted)
+        valid_boxes = xyxy[accepted]
+        centers = (valid_boxes[:, :2] + valid_boxes[:, 2:]) / 2
+        sizes = valid_boxes[:, 2:] - valid_boxes[:, :2]
+        tracker_input = SimpleNamespace(
+            xywh=np.concatenate((centers, sizes), axis=1),
+            conf=scores[accepted], cls=np.zeros(len(accepted)),
+        )
+        tracks = self.tracker.update(tracker_input, crop)
+        # ByteTrack/BoT-SORT may retain predicted or lost states after a head
+        # leaves the polygon. Do not keep those states for a later re-entry.
+        for name in ("tracked_stracks", "lost_stracks"):
+            states = getattr(self.tracker, name, None)
+            if states is not None:
+                setattr(self.tracker, name, [
+                    state for state in states if self.roi_frame.contains_crop_box(state.xyxy)
+                ])
+        detections = []
+        for track in tracks:
+            box = self.roi_frame.to_frame_box(track[:4])
+            if box is not None and self.roi_frame.contains_frame_box(box):
+                detections.append(Detection(f"rear:head{int(track[4]):05d}", box, float(track[5])))
+        return detections
+
+
+class HeadRoiFrame:
+    """Fixed pixel geometry for the lifetime of a REAR tracking session."""
+
+    def __init__(self, shape: tuple[int, ...], polygon: list[tuple[float, float]]) -> None:
+        self.height, self.width = shape[:2]
+        self.contour = np.asarray([
+            (min(round(x * self.width), self.width - 1),
+             min(round(y * self.height), self.height - 1)) for x, y in polygon
+        ], dtype=np.int32)
+        self.x, self.y, self.w, self.h = cv2.boundingRect(self.contour)
+        local = self.contour - (self.x, self.y)
+        self.mask = np.zeros((self.h, self.w), dtype=np.uint8)
+        cv2.fillPoly(self.mask, [local], 255)
+
+    def crop_masked(self, frame: np.ndarray) -> np.ndarray:
+        crop = frame[self.y:self.y + self.h, self.x:self.x + self.w]
+        return cv2.bitwise_and(crop, crop, mask=self.mask)
+
+    def contains_crop_box(self, box: np.ndarray) -> bool:
+        center = ((float(box[0] + box[2]) / 2) + self.x,
+                  (float(box[1] + box[3]) / 2) + self.y)
+        return cv2.pointPolygonTest(self.contour, center, False) >= 0
+
+    def to_frame_box(self, box: np.ndarray) -> tuple[int, int, int, int] | None:
+        x1 = max(0, min(self.width - 1, round(float(box[0]) + self.x)))
+        y1 = max(0, min(self.height - 1, round(float(box[1]) + self.y)))
+        x2 = max(0, min(self.width - 1, round(float(box[2]) + self.x)))
+        y2 = max(0, min(self.height - 1, round(float(box[3]) + self.y)))
+        return (x1, y1, x2, y2) if x2 > x1 and y2 > y1 else None
+
+    def contains_frame_box(self, box: tuple[int, int, int, int]) -> bool:
+        center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+        return cv2.pointPolygonTest(self.contour, center, False) >= 0
 
 
 @dataclass(slots=True)
@@ -132,13 +199,14 @@ class HeadZoneCounter:
         state = self._state(detection.track_id, point, frame_index, active_track_ids or {detection.track_id})
         state.last_seen = frame_index
         state.last_point = point
-        state.trail.append((round(x), round(y)))
         if not point_in_polygon(point, self.config.roi):
             # Leaving the observation ROI is not a valid transition across the door.
             state.stable = state.candidate = Zone.NONE
             state.candidate_frames = 0
             state.armed = state.transitioned = state.counted = False
+            state.trail.clear()
             return None
+        state.trail.append((round(x), round(y)))
         zone = self._zone(point)
         if zone != state.candidate:
             state.candidate, state.candidate_frames = zone, 1
@@ -173,6 +241,15 @@ class HeadZoneCounter:
             key: state for key, state in self.states.items()
             if frame_index - state.last_seen <= self.config.state_ttl_frames
         }
+
+    def invalidate_missing(self, active_track_ids: set[str]) -> None:
+        """A gap cannot stand in for a verified transition inside the ROI."""
+        for track_id, state in self.states.items():
+            if track_id not in active_track_ids:
+                state.stable = state.candidate = Zone.NONE
+                state.candidate_frames = 0
+                state.armed = state.transitioned = state.counted = False
+                state.trail.clear()
 
 
 @dataclass(slots=True)
@@ -259,6 +336,7 @@ class RearHeadOutPipeline:
         processed = 0
         detected_heads = 0
         tracked_heads = 0
+        inference_s = 0.0
         stopped = False
         total: int | None = None
         clock = SourceClock(datetime.now(timezone.utc))
@@ -270,6 +348,7 @@ class RearHeadOutPipeline:
                 progress, mode="HEAD_TRACKING_ZONE_OUT", status=status,
                 frames=processed, total_frames=total, count=counter.total_out,
                 detected_heads=detected_heads, tracked_heads=tracked_heads,
+                inference_s=round(inference_s, 4),
                 stable_a_confirmations=counter.stable_a_confirmations,
                 transition_confirmations=counter.transition_confirmations,
                 stable_b_confirmations=counter.stable_b_confirmations,
@@ -308,6 +387,8 @@ class RearHeadOutPipeline:
                     active_track_ids = {detection.track_id for detection in detections}
                     detected_heads += getattr(tracker, "last_detection_count", len(detections))
                     tracked_heads += len(detections)
+                    inference_s += getattr(tracker, "last_inference_s", 0.0)
+                    counter.invalidate_missing(active_track_ids)
                     frame_events = []
                     for detection in detections:
                         event = counter.update(
@@ -364,6 +445,11 @@ class RearHeadOutPipeline:
                    "evaluation": "N/A: no labeled ground truth",
                    "diagnostics": {
                        "detected_heads": detected_heads, "tracked_heads": tracked_heads,
+                       "inference_s": round(inference_s, 4),
+                       "roi_crop_size": (
+                           [tracker.roi_frame.w, tracker.roi_frame.h]
+                           if getattr(tracker, "roi_frame", None) is not None else None
+                       ),
                        "stable_a_confirmations": counter.stable_a_confirmations,
                        "transition_confirmations": counter.transition_confirmations,
                        "stable_b_confirmations": counter.stable_b_confirmations,

@@ -17,7 +17,8 @@ from streamlit.testing.v1 import AppTest
 from app.counting_tab import _show_preview
 from app.video_lab import start_job
 from busreid.config import AppConfig, CameraConfig, DetectorConfig, RearHeadOutConfig, load_config
-from busreid.rear_head_out import HeadTracker, HeadZoneCounter, RearHeadOutPipeline
+from busreid.pipeline import OverlayOptions
+from busreid.rear_head_out import HeadRoiFrame, HeadTracker, HeadZoneCounter, RearHeadOutPipeline, _annotate
 from busreid.types import Detection, Direction
 from busreid.video import VideoMetadata
 from busreid.video_output import validate_video
@@ -46,6 +47,7 @@ def run_tracks(frames: list[list[tuple[str, float]]], **changes):
     events = []
     for frame_index, tracks in enumerate(frames):
         active_track_ids = {track_id for track_id, _ in tracks}
+        counter.invalidate_missing(active_track_ids)
         for track_id, x in tracks:
             event = counter.update(
                 detection(track_id, x), (100, 100, 3), frame_index, frame_index / 10, active_track_ids
@@ -93,6 +95,13 @@ def test_leaving_roi_cannot_serve_as_confirmed_transition() -> None:
     assert counter.total_out == 0 and not events
 
 
+def test_missing_at_roi_boundary_cancels_pending_crossing_even_if_id_returns() -> None:
+    frames = path_for("head1", [.2, .2, .5, .5]) + [[], []] + path_for("head1", [.8, .8])
+    counter, events = run_tracks(frames)
+    assert counter.total_out == 0 and not events
+    assert list(counter.states["head1"].trail) == [(80, 50), (80, 50)]
+
+
 def test_two_heads_count_independently() -> None:
     frames = [[("one", x), ("two", x)] for x in [.2, .2, .5, .5, .8, .8]]
     counter, events = run_tracks(frames)
@@ -100,11 +109,11 @@ def test_two_heads_count_independently() -> None:
     assert {event.track_id for event in events} == {"one", "two"}
 
 
-def test_temporary_loss_and_unambiguous_id_change_recover_state() -> None:
+def test_temporary_loss_and_id_change_do_not_complete_unobserved_crossing() -> None:
     frames = path_for("old", [.2, .2, .5, .5]) + [[], []] + path_for("new", [.52, .8, .8])
     counter, events = run_tracks(frames)
-    assert counter.total_out == 1 and len(events) == 1
-    assert events[0].track_id == "new" and "old" not in counter.states
+    assert counter.total_out == 0 and not events
+    assert "old" not in counter.states
 
 
 def test_ambiguous_id_change_during_occlusion_is_not_counted() -> None:
@@ -137,7 +146,16 @@ def test_stale_track_is_pruned_and_new_video_resets() -> None:
     assert fresh.total_out == 0
 
 
-def test_head_tracker_calls_single_class_tracking_with_persist(monkeypatch) -> None:
+def test_head_roi_crop_mask_and_original_frame_coordinates() -> None:
+    roi = HeadRoiFrame((1080, 1920, 3), [(.5, .2), (.75, .2), (.75, .6), (.5, .6)])
+    assert (roi.x, roi.y, roi.w, roi.h) == (960, 216, 481, 433)
+    assert roi.to_frame_box(np.array([10, 20, 30, 40])) == (970, 236, 990, 256)
+    assert roi.crop_masked(np.ones((1080, 1920, 3), dtype=np.uint8)).shape == (433, 481, 3)
+    full = HeadRoiFrame((100, 100, 3), config().roi)
+    assert (full.x, full.y, full.w, full.h) == (0, 0, 100, 100)
+
+
+def test_head_tracker_detects_masked_roi_before_tracking(monkeypatch) -> None:
     class Tensor:
         def __init__(self, data):
             self.data = np.array(data)
@@ -155,25 +173,75 @@ def test_head_tracker_calls_single_class_tracking_with_persist(monkeypatch) -> N
             return len(self.data)
 
     calls = []
+    tracker_inputs = []
+    roi = [(.2, .2), (.8, .2), (.8, .8), (.5, .5), (.2, .8)]
 
     class FakeModel:
-        task = "detect"
-        names = {0: "head"}
-
-        def track(self, **kwargs):
+        def predict(self, **kwargs):
             calls.append(kwargs)
             return [SimpleNamespace(boxes=SimpleNamespace(
-                xyxy=Tensor([[10, 10, 20, 20]]), id=Tensor([7]), conf=Tensor([.8])
+                xyxy=Tensor([[10, 10, 20, 20], [27, 48, 37, 58]]), conf=Tensor([.8, .9])
             ))]
 
-    monkeypatch.setattr("busreid.rear_occupancy._weights_path", lambda _model: Path("head.pt"))
-    monkeypatch.setitem(sys.modules, "ultralytics", ModuleType("ultralytics"))
-    monkeypatch.setattr(sys.modules["ultralytics"], "YOLO", lambda _path: FakeModel(), raising=False)
-    tracker = HeadTracker(config())
-    found = tracker.track(np.zeros((100, 100, 3), dtype=np.uint8))
-    assert found[0].track_id == "rear:head00007"
-    assert calls[0]["persist"] and calls[0]["classes"] == [0]
-    assert calls[0]["tracker"] == "bytetrack.yaml"
+    class FakeTrackEngine:
+        def __init__(self, args, frame_rate):
+            assert frame_rate == 30 and args.tracker_type == "bytetrack"
+            outside = SimpleNamespace(xyxy=np.array([27, 48, 37, 58]))
+            self.tracked_stracks = [outside]
+            self.lost_stracks = [outside]
+
+        def update(self, results, image):
+            tracker_inputs.append((results, image.copy()))
+            assert len(results.conf) == 1  # outside-polygon detection never enters ByteTrack
+            x, y, w, h = results.xywh[0]
+            return np.array([[x - w / 2, y - h / 2, x + w / 2, y + h / 2, 7, .8, 0, 0]])
+
+    fake_model = FakeModel()
+    monkeypatch.setattr("busreid.rear_head_out.HeadDetector.__init__",
+                        lambda self, _config: setattr(self, "model", fake_model))
+    package = ModuleType("ultralytics")
+    package.__path__ = []
+    trackers = ModuleType("ultralytics.trackers")
+    trackers.__path__ = []
+    track_module = ModuleType("ultralytics.trackers.track")
+    track_module.TRACKER_MAP = {"bytetrack": FakeTrackEngine}
+    utils = ModuleType("ultralytics.utils")
+    utils.__path__ = []
+    utils.IterableSimpleNamespace = SimpleNamespace
+    utils.yaml_load = lambda _path: {"tracker_type": "bytetrack"}
+    checks = ModuleType("ultralytics.utils.checks")
+    checks.check_yaml = lambda value: value
+    for name, module in (("ultralytics", package), ("ultralytics.trackers", trackers),
+                         ("ultralytics.trackers.track", track_module), ("ultralytics.utils", utils),
+                         ("ultralytics.utils.checks", checks)):
+        monkeypatch.setitem(sys.modules, name, module)
+    tracker = HeadTracker(config(roi=roi))
+    tracker.confidence, tracker.iou, tracker.imgsz, tracker.device = .35, .5, 640, None
+    frame = np.full((100, 100, 3), 200, dtype=np.uint8)
+    found = tracker.track(frame)
+    again = tracker.track(frame)
+    assert found == again and found[0].track_id == "rear:head00007"
+    assert found[0].bbox == (30, 30, 40, 40)
+    assert tracker.last_detection_count == 1
+    assert calls[0]["source"].shape == (61, 61, 3) and calls[0]["classes"] == [0]
+    assert calls[0]["source"][53, 32].tolist() == [0, 0, 0]  # concave notch masked
+    assert calls[0]["source"][15, 15].tolist() == [200, 200, 200]
+    assert tracker_inputs[0][1].shape == (61, 61, 3)
+    assert not tracker.tracker.tracked_stracks and not tracker.tracker.lost_stracks
+    counter = HeadZoneCounter(config())
+    counter.update(found[0], frame.shape, 0, 0.0)
+    rectangles = []
+    original_rectangle = cv2.rectangle
+
+    def record_rectangle(image, start, end, color, thickness):
+        if color == (0, 230, 70):
+            rectangles.append((start, end))
+        return original_rectangle(image, start, end, color, thickness)
+
+    monkeypatch.setattr(cv2, "rectangle", record_rectangle)
+    annotated = _annotate(frame, found, counter, config(), OverlayOptions(), [])
+    assert annotated.shape == frame.shape
+    assert rectangles == [((30, 30), (40, 40))]
 
 
 def video(path: Path, frames: int = 6) -> None:
@@ -297,6 +365,7 @@ def test_cli_mode_and_config_validation(tmp_path: Path, monkeypatch) -> None:
     import yaml
 
     settings = yaml.safe_load(Path("configs/cameras.yaml").read_text(encoding="utf-8"))
+    settings["rear_head_out"]["roi"] = config().roi
     settings["rear_head_out"]["zone_a"] = config().zone_a
     settings["rear_head_out"]["zone_b"] = config().zone_b
     custom = tmp_path / "cameras.yaml"

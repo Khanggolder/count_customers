@@ -31,7 +31,11 @@ def config_copy(tmp_path: Path) -> Path:
     config_dir = tmp_path / "configs"
     config_dir.mkdir(exist_ok=True)
     path = config_dir / "cameras.yaml"
-    path.write_bytes(Path("configs/cameras.yaml").read_bytes())
+    raw = yaml.safe_load(Path("configs/cameras.yaml").read_text(encoding="utf-8"))
+    raw["rear_head_out"]["roi"] = ROI
+    raw["rear_head_out"]["zone_a"] = [(.35, .2), (.45, .2), (.45, .8), (.35, .8)]
+    raw["rear_head_out"]["zone_b"] = [(.55, .2), (.65, .2), (.65, .8), (.55, .8)]
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
     return path
 
 
@@ -180,6 +184,7 @@ def _offline(monkeypatch) -> None:
 
 def test_dashboard_head_draft_survives_switch_and_undo(tmp_path: Path, monkeypatch) -> None:
     _offline(monkeypatch)
+    original_roi = load_config().rear_head_out.roi
     source = tmp_path / "rear.mp4"
     video(source)
     monkeypatch.setattr(roi_editor, "_select_source", lambda *_args: (str(source), True))
@@ -195,7 +200,7 @@ def test_dashboard_head_draft_survives_switch_and_undo(tmp_path: Path, monkeypat
     next(item for item in app.selectbox if item.label == "Camera").set_value("rear_head_out").run(timeout=20)
     assert app.session_state["roi_editor_rear_head_out"]["zones"]["roi"] == []
     next(button for button in app.button if button.label == "Hoàn tác").click().run(timeout=20)
-    assert app.session_state["roi_editor_rear_head_out"]["zones"]["roi"] == ROI
+    assert app.session_state["roi_editor_rear_head_out"]["zones"]["roi"] == original_roi
     assert not app.exception
 
 
